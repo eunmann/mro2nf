@@ -63,6 +63,11 @@ func TestRunDispatch(t *testing.T) {
 		{name: "deleted run", args: []string{"run"}, want: errUnknownCommand},
 		{name: "deleted post", args: []string{"post"}, want: errUnknownCommand},
 		{name: "version", args: []string{"version"}, want: nil},
+		{name: "help", args: []string{"-h"}, want: nil},
+		{name: "long help", args: []string{"--help"}, want: nil},
+		{name: "plan help", args: []string{"plan", "-h"}, want: nil},
+		{name: "stage help", args: []string{"stage", "-help"}, want: nil},
+		{name: "outs help", args: []string{"outs", "-h"}, want: nil},
 	}
 
 	for _, tc := range tests {
