@@ -21,7 +21,7 @@ const mrcoreAdaptedFile = "adapted.go"
 
 // mrcoreCopies are the files of internal/mrcore that copy Martian core.
 func mrcoreCopies() []string {
-	return []string{"fork.go", "resolve.go", "convert.go", mrcoreAdaptedFile}
+	return []string{"fork.go", "resolve.go", "convert.go", "stage.go", mrcoreAdaptedFile}
 }
 
 // coreSources are the files of Martian core internal/mrcore copies from.
@@ -52,6 +52,7 @@ func mrcoreAdapted() map[string]string {
 		"(*Fork).updateId":               "sets the fork id and a name keyed by it, with no pipestance paths",
 		"(*Fork).writeDisable":           "marks the fork disabled; its outs read null (Fork.outs)",
 		"(*Fork).disabled":               "no read size limit; a not-ready binding fails",
+		"(*Node).resolvePipelineOutputs": "no read size limit; a not-ready binding fails",
 	}
 }
 

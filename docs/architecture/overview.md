@@ -142,7 +142,7 @@ resolution, `internal/mrcore` (`TestMrcoreMatchesCore`).
 | `core` `ReadOverrides` | reading `mrp --overrides` | [`cmd/mre/run.go`](../../cmd/mre/run.go) |
 | `core` `PipestanceOverrides.ApplyResourceOverrides` | each job's resources | [`internal/job/resources.go`](../../internal/job/resources.go), [`internal/job/overrides.go`](../../internal/job/overrides.go) |
 | `core` `LazyArgumentMap.Path` | output projection | [`internal/cg/resolve.go`](../../internal/cg/resolve.go) |
-| `core` `LazyArgumentMap.ValidateOutputs`, `MarshalerMap.ValidatePipelineOutputs` | output checks | [`internal/cg/post.go`](../../internal/cg/post.go), [`internal/cg/outs.go`](../../internal/cg/outs.go) |
+| `core` `LazyArgumentMap.ValidateOutputs`, `MarshalerMap.ValidatePipelineOutputs` | output checks, in core's own `Fork.verifyOutput` and `Fork.verifyPipelineOutput` | [`internal/mrcore/stage.go`](../../internal/mrcore/stage.go) |
 | `core` `Runtime.ReattachToPipestance`, `Pipestance.PostProcess` | the published tree and outs JSON | [`internal/cg/outs.go`](../../internal/cg/outs.go) |
 | `core` `NewMetadata` | writing a job's metadata | [`internal/job/launch.go`](../../internal/job/launch.go) |
 | `core` runtime resolution (`fork.go`, `resolve.go`, `runtime.go`, `node.go`, `stage.go`) | resolving one instance's inputs and forks, adapted to read what a task staged | [`internal/mrcore`](../../internal/mrcore) |

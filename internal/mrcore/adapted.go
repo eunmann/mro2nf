@@ -75,6 +75,23 @@ func (node *Node) resolveInputs(fork ForkId) (MarshalerMap, error) {
 	return result, errs.If()
 }
 
+func (node *Node) resolvePipelineOutputs(fork ForkId) (json.Marshaler, syntax.Type, error) {
+	const readSize = 0
+	ro := node.call.ResolvedOutputs()
+	ready, r, err := node.top.resolve(ro.Exp, ro.Type, fork, readSize)
+	if err == nil && !ready {
+		err = node.top.notReady()
+	}
+	if err != nil {
+		tid := ro.Type.TypeId()
+		err = &elementError{
+			element: node.GetFQName() + " fork " + fork.GoString() + " (" + tid.String() + ")",
+			inner:   err,
+		}
+	}
+	return r, ro.Type, err
+}
+
 func (node *TopNode) resolveMerge(binding *syntax.MergeExp, t syntax.Type,
 	fork ForkId, readSize int64) (bool, json.Marshaler, error) {
 	var innerT syntax.Type

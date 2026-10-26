@@ -241,10 +241,10 @@ func TestSplitElementStaged(t *testing.T) {
 	top := compile(t, gather, s)
 	sq := stage(t, top, "TOP.SQ")
 
-	v, err := top.Resolve(sq.ResolvedInputs()["x"].Exp, top.types.Get(syntax.TypeId{Tname: syntax.KindInt}),
-		ForkId{Part(sq.ForkRoots()[0], arrayIndexFork(1))})
-	if err != nil || compact(t, v) != "7" {
-		t.Errorf("x at SQ fork 1 = %v, %v; want the staged 7", v, err)
+	ready, v, err := top.resolve(sq.ResolvedInputs()["x"].Exp, top.types.Get(syntax.TypeId{Tname: syntax.KindInt}),
+		ForkId{Part(sq.ForkRoots()[0], arrayIndexFork(1))}, 0)
+	if err != nil || !ready || compact(t, v) != "7" {
+		t.Errorf("x at SQ fork 1 = %v, %t, %v; want the staged 7", v, ready, err)
 	}
 }
 
@@ -316,9 +316,7 @@ func TestInputsNestedGather(t *testing.T) {
 
 	top := compile(t, nested, s)
 
-	ro := top.allNodes["TOP"].call.ResolvedOutputs()
-
-	v, err := top.Resolve(ro.Exp, ro.Type, nil)
+	v, _, err := top.PipelineOutputs("TOP", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,9 +418,8 @@ func TestInputsKnownInner(t *testing.T) {
 	}}
 
 	top := compile(t, knownInner, s)
-	ro := top.allNodes["TOP"].call.ResolvedOutputs()
 
-	v, err := top.Resolve(ro.Exp, ro.Type, nil)
+	v, _, err := top.PipelineOutputs("TOP", nil)
 	if err != nil || compact(t, v) != `{"yss":[[1,2],[3,4]]}` {
 		t.Errorf("TOP outs = %v, %v", v, err)
 	}
@@ -557,9 +554,8 @@ func TestFailuresAreLoud(t *testing.T) {
 		t.Error("Inputs of an unknown node succeeded")
 	}
 
-	sum := stage(t, top, "TOP.SUM")
-	if _, err := top.Resolve(sum.ResolvedInputs()["ys"].Exp, sum.ResolvedInputs()["ys"].Type, nil); !errors.Is(err, ErrNotStaged) {
-		t.Errorf("Resolve of an unstaged gather: %v, want ErrNotStaged", err)
+	if _, _, err := top.Inputs("TOP.SUM", nil); !errors.Is(err, ErrNotStaged) {
+		t.Errorf("Inputs of an unstaged gather: %v, want ErrNotStaged", err)
 	}
 
 	sq := stage(t, top, "TOP.SQ")
@@ -609,12 +605,38 @@ func TestForkIdKey(t *testing.T) {
 	if !a.determined() || u.determined() {
 		t.Errorf("determined: %v %v, want true false", a.determined(), u.determined())
 	}
+}
 
-	if _, ok := Elements(marshallerArray{json.RawMessage("1")}); !ok {
-		t.Error("Elements of a resolved array")
+// TestPipelineOutputs: a pipeline's outs resolve and pass mrp's check of
+// each struct; one of the wrong type fails it, as do a stage's outs of the
+// wrong type, and a read the task did not stage.
+func TestPipelineOutputs(t *testing.T) {
+	s := gatherStore()
+	s.outs["TOP.SQ|fork0"] = s.outs["TOP.SQ|0"]
+	s.outs["TOP.SUM|"], s.outs["TOP.SUMM|"] = `{"s":14}`, `{"s":30}`
+	top := compile(t, gather, s)
+
+	v, typ, err := top.PipelineOutputs("TOP", nil)
+	if err != nil || compact(t, v) != `{"s":14,"sm":30}` || typ == nil {
+		t.Errorf("PipelineOutputs = %v, %v, %v", v, typ, err)
 	}
 
-	if _, ok := Elements(json.RawMessage("[1]")); ok {
-		t.Error("Elements of raw JSON")
+	f := newFork(top.allNodes["TOP"], nil)
+	if ok, _ := f.verifyPipelineOutput(MarshalerMap{"s": json.RawMessage("1.5"), "sm": json.RawMessage("1")}, typ); ok {
+		t.Error("pipeline outs s = 1.5 pass mrp's check")
+	}
+
+	if err := top.VerifyOutput("TOP.SUM", nil, LazyArgumentMap{"s": json.RawMessage("1.5")}); !errors.Is(err, ErrInvalidOuts) {
+		t.Errorf("VerifyOutput of s = 1.5: %v, want ErrInvalidOuts", err)
+	}
+
+	if err := top.VerifyOutput("TOP.SUM", nil, LazyArgumentMap{"s": json.RawMessage("2")}); err != nil {
+		t.Errorf("VerifyOutput of s = 2: %v", err)
+	}
+
+	delete(s.outs, "TOP.SUMM|")
+
+	if _, _, err := top.PipelineOutputs("TOP", nil); !errors.Is(err, ErrNotStaged) {
+		t.Errorf("PipelineOutputs without SUMM staged: %v, want ErrNotStaged", err)
 	}
 }

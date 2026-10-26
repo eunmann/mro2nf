@@ -101,16 +101,6 @@ func (r *resolver) disables(gate syntax.Exp, fork Fork) (bool, error) {
 	return off, nil
 }
 
-// resolve evaluates exp of type t at fork (core/resolve.go:201).
-func (r *resolver) resolve(exp syntax.Exp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	v, err := r.core().Resolve(exp, t, coreFork(fork))
-	if err != nil {
-		return v, fmt.Errorf("resolve at fork %s: %w", fork, err)
-	}
-
-	return v, nil
-}
-
 // specialize narrows exp to fork with Martian's BindingPath, as resolve
 // does before it evaluates (core/resolve.go:210-227).
 func (r *resolver) specialize(exp syntax.Exp, t syntax.Type, fork Fork) (syntax.Exp, syntax.Type, error) {

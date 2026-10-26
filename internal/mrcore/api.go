@@ -13,6 +13,9 @@ var (
 	// ErrUnresolved reports a fork root whose forks the task could not count.
 	ErrUnresolved = errors.New("fork root unresolved")
 
+	// ErrInvalidOuts reports outs mrp's output checks reject.
+	ErrInvalidOuts = errors.New("invalid outs")
+
 	errOtherKey = errors.New("not the fork's own key")
 )
 
@@ -116,6 +119,49 @@ func (t *TopNode) Disables(gate syntax.Exp, fork ForkId) (bool, error) {
 	}
 }
 
+// VerifyOutput checks outs, the outs of stage fqid's fork at fork, as mrp
+// checks a finished stage's (stage.go:764 Fork.verifyOutput): an error
+// fails it, wrapping ErrInvalidOuts.
+func (t *TopNode) VerifyOutput(fqid string, fork ForkId, outs LazyArgumentMap) error {
+	node, err := t.node(fqid)
+	if err != nil {
+		return err
+	}
+
+	if ok, msg := newFork(node, fork).verifyOutput(outs); !ok {
+		return fmt.Errorf("%w of %s: %s", ErrInvalidOuts, fqid, msg)
+	}
+
+	return nil
+}
+
+// PipelineOutputs resolves the outs of pipeline fqid's fork at fork and
+// checks them, as mrp's Fork.stepPipeline does (stage.go:1358-1366,
+// resolvePipelineOutputs then verifyPipelineOutput): the outs and their
+// type, or an error, which wraps ErrInvalidOuts where the check rejects
+// them.
+func (t *TopNode) PipelineOutputs(fqid string, fork ForkId) (json.Marshaler, syntax.Type, error) {
+	node, err := t.node(fqid)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	t.unstaged = nil
+
+	outs, typ, err := node.resolvePipelineOutputs(fork)
+	if err != nil {
+		return nil, nil, fmt.Errorf("outs of %s: %w", fqid, t.withUnstaged(err))
+	}
+
+	if f := newFork(node, fork); len(f.OutParams().List) > 0 {
+		if ok, msg := f.verifyPipelineOutput(outs, typ); !ok {
+			return nil, nil, fmt.Errorf("%w of %s: %s", ErrInvalidOuts, fqid, msg)
+		}
+	}
+
+	return outs, typ, nil
+}
+
 // Index is the index of root's part in fork, and false where fork has none.
 func (f ForkId) Index(root *syntax.CallGraphStage) (syntax.CollectionIndex, bool) {
 	p, err := f.matchPart(root.Call())
@@ -190,13 +236,6 @@ func (t *TopNode) splitRemoved(root *syntax.CallGraphStage, fork ForkId) bool {
 	return err == nil && !split
 }
 
-// Elements is the elements of v where it is an array a resolution returned.
-func Elements(v json.Marshaler) ([]json.Marshaler, bool) {
-	a, ok := v.(marshallerArray)
-
-	return a, ok
-}
-
 // Inputs resolves the input bindings of stage fqid at fork as the job's
 // _args resolve them (core Node.resolveInputs). An input that reads only
 // elements its collection lacks keeps the value resolved around them, as
@@ -230,22 +269,6 @@ func (t *TopNode) withUnstaged(err error) error {
 	}
 
 	return fmt.Errorf("%w (%w)", err, t.notReady())
-}
-
-// Resolve evaluates exp of type typ at fork (core TopNode.resolve).
-func (t *TopNode) Resolve(exp syntax.Exp, typ syntax.Type, fork ForkId) (json.Marshaler, error) {
-	t.unstaged = nil
-
-	ready, v, err := t.resolve(exp, typ, fork, 0)
-
-	switch {
-	case err != nil:
-		return v, t.withUnstaged(err)
-	case !ready:
-		return nil, t.notReady()
-	default:
-		return v, nil
-	}
 }
 
 // onlyMissing reports whether every error err holds is a missing element:
