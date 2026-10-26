@@ -51,7 +51,7 @@ cat results/pipeline_outs.json
 |---|---|
 | [Usage](docs/usage.md) | install, transpile, run, profiles, parameters, resources, images, files, troubleshooting, upgrading, compatibility |
 | [Feature coverage](docs/feature-coverage.md) | which Martian features work |
-| [Divergences](docs/reference/divergences.md) | every known difference from `mrp`, and why |
+| [Divergences](docs/divergences.md) | every known difference from `mrp`, and why |
 | [Design](docs/design.md) | how it works, with links to the code |
 | [Contributing](CONTRIBUTING.md) | building, testing, CI and releases |
 | [Security](SECURITY.md) | what stage code can do, and how to report a vulnerability |

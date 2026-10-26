@@ -59,7 +59,7 @@ scripts/aws/           comparison and critical-path analysis of live AWS runs
 | `make gen-diff` | generated programs against `mrp` (`GEN_SEEDS`, `GEN_COUNT`) |
 | `make test-cellranger` | the Cell Ranger check (`CELLRANGER_HOME`) |
 | `make record-goldens` | re-record `testdata/*/expected/outs/` from `mrp` |
-| `make docs-divergences`, `make notices` | regenerate `docs/reference/divergences.md` and `THIRD_PARTY_NOTICES` |
+| `make docs-divergences`, `make notices` | regenerate `docs/divergences.md` and `THIRD_PARTY_NOTICES` |
 | `make vulncheck`, `make deadcode`, `make cross` | govulncheck, unreachable code, a build for each release platform |
 
 ## Tests

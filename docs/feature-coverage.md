@@ -3,7 +3,7 @@
 Which Martian features a transpiled pipeline supports. "Supported" means the
 e2e suite runs a fixture under both `mrp` and Nextflow and the outputs and
 every stage's `_args` and `_outs` match. "Differs" means supported, with a
-listed [divergence](reference/divergences.md). Nothing unsupported fails
+listed [divergence](divergences.md). Nothing unsupported fails
 silently: it fails the transpile or the run's PLAN, before any stage starts.
 
 ## Language

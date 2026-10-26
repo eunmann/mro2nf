@@ -252,7 +252,7 @@ touches a published file's bytes, or a lane exceeds `bench/baseline.json`.
 Every known difference from `mrp` is an entry of
 [`test/e2e/divergences.json`](../test/e2e/divergences.json), with its reason
 and tests. The differential tests excuse a difference only through an entry,
-and [Divergences](reference/divergences.md) is generated from it.
+and [Divergences](divergences.md) is generated from it.
 
 ## Packages
 
