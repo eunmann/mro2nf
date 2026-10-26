@@ -98,6 +98,28 @@ pipeline P(out int m,)
 	}
 }
 
+// TestReadSourceCompilerPanicIsACompileError: a source Martian's compiler
+// panics on (syntax/compile_calls.go:110 checkMappings, over a projection of
+// a pipeline output P1 lacks, which test/gen's seed 192 shrank to) fails the
+// transpile with an error, not a crash.
+func TestReadSourceCompilerPanicIsACompileError(t *testing.T) {
+	path := filepath.Join("..", "..", "test", "gen", "testdata", "compiler_panic.mro")
+
+	_, err := ReadSource(path, []string{filepath.Dir(path)})
+	if !errors.Is(err, errCompilerPanic) {
+		t.Errorf("ReadSource: %v, want %v", err, errCompilerPanic)
+	}
+}
+
+// TestRecoverLiteralTurnsEveryPanicIntoAnError: a panic of the parse other
+// than a number literal out of range is the parse's compile error.
+func TestRecoverLiteralTurnsEveryPanicIntoAnError(t *testing.T) {
+	lit, err := recoverLiteral("parse", func() error { panic("boom") })
+	if lit != "" || !errors.Is(err, errCompilerPanic) {
+		t.Errorf("recoverLiteral = %q, %v, want no literal and %v", lit, err, errCompilerPanic)
+	}
+}
+
 // TestCheckValueNamesTheOutOfRangeLiteral: a launch value's out-of-range
 // literal is named as written, past an earlier int64 minimum, whose digits
 // are those parseInt's panic names for the positive literal.

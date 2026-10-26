@@ -108,7 +108,7 @@ func splitEntry(src []byte, path string, mroPaths []string) (string, string, err
 func compileEntry(path string, mroPaths []string) (*syntax.Ast, error) {
 	var ast *syntax.Ast
 
-	lit, err := recoverLiteral(func() error {
+	lit, err := recoverLiteral("compile "+path, func() error {
 		_, _, a, err := syntax.Compile(path, mroPaths, false)
 		if err != nil {
 			return fmt.Errorf("compile %s: %w", path, err)
