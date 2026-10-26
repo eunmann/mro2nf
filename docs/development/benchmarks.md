@@ -37,6 +37,10 @@ and runs both:
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,002 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 2,502 |
 | `TestScaleMapChain` | `mapchain` | 4 forks | 1,250 forks | 10,004 |
+| `TestScaleZip` | `zip` | 4 forks | 10,000 forks | 10,004 |
+| `TestScaleZipGated` | `zipgated` | 4 forks | 10,000 forks | 10,005 |
+| `TestScaleForkDisabled` | `forkdisabled` | 4 forks | 3,334 forks | 10,005 |
+| `TestScaleSplitBroadcast` | `splitbroadcast` | 4 samples | 2,500 samples | 10,003 |
 
 The default `SCALE_RUN` also selects `TestScaleWideFanin` (#503), which the
 weekly nightly runs as its own job: the generated wide pipeline plus a stage
@@ -46,9 +50,10 @@ channels one workflow takes, run under Nextflow.
 `SCALE_WIDTH` replaces the wide width of every selected bench shape. Each
 default wide width is sized to finish within the 100 minutes one shape runs
 under (`scaleShapeTimeout`). The selected shapes run one after another, so
-the default `SCALE_TIMEOUT` of 700 minutes gives each of the seven (the six
-above and `TestScaleWideFanin`) 100; the nightly runs one shape per job with
-`SCALE_TIMEOUT=100m`.
+the default `SCALE_TIMEOUT` of 1,100 minutes gives each of the eleven (the
+ten above and `TestScaleWideFanin`) 100; the nightly runs one shape per job
+with `SCALE_TIMEOUT=100m`, its `SCALE_RUN` anchored at both ends, as `Split`
+and `Zip` begin other shapes' names.
 
 Each run must complete and gather every fork's or chunk's output. On top of the
 `bench_metrics.py` metrics below, the tier reads a staging probe of every task
@@ -119,7 +124,7 @@ the same way.
 
 ## Fixtures and lanes
 
-Ten fixtures live under `bench/`, exercising the costly patterns the overhead
+Twelve fixtures live under `bench/`, exercising the costly patterns the overhead
 rule targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -166,6 +171,13 @@ rule targets:
   (`GATED`) (`pipeline_w4.mro`, `pipeline_w16.mro`). Under the flat-staging
   gate: each B task stages the one A file at its own index, joined on the
   two roots' ordinals (an aligned `cg.ReadPattern`), never all N of A's.
+- **`mapgather`** — a map call B reading another map call A's files both at
+  its own fork and whole (`f = split A.f`, `all = A.f`, #622), for an A
+  over an entry array (`LIT`) and over a stage's outs (`RUN`)
+  (`pipeline_w4.mro`, `pipeline_w16.mro`). The whole read covers the
+  aligned one, so every B instance reads A through the one `GATHER` of its
+  outs; each B task stages all N of A's files, as each `mrp` job reads
+  them, so the lanes are not under the flat-staging gate.
 - **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
   call over a split stage, whose every chunk and join reads it
   (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into
