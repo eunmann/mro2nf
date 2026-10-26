@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 )
 
 // TestRootsHolds: roots hold each root and what lies under it once cleaned,
@@ -83,7 +84,7 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "outs")
 	payload := map[string]any{"out": own, "ref": input}
 
-	writeBundle(t, bundle, payload, fields(t, "out file", "ref file"), shim.Opts{Confine: conf, Roots: roots})
+	writeBundle(t, bundle, payload, typestest.Fields(t, "out file", "ref file"), shim.Opts{Confine: conf, Roots: roots})
 
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
@@ -147,7 +148,7 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	}
 
 	bundle := filepath.Join(t.TempDir(), "outs")
-	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
+	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, typestest.Fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
 		t.Fatalf("a stage output linking to an input read in place: %v", err)
 	}
 }

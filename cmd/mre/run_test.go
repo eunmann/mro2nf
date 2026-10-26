@@ -12,6 +12,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -283,7 +284,7 @@ func TestRunBundlesConfineStageOutputs(t *testing.T) {
 		}
 	}
 
-	tbl, file := compileTypes(t, "filetype txt;\n"), fields(t, "f txt")
+	tbl, file := compileTypes(t, "filetype txt;\n"), typestest.Fields(t, "f txt")
 	outs := json.RawMessage(`{"f":"` + host + `"}`)
 	defs := &core.StageDefs{ChunkDefs: []*core.ChunkDef{{Args: core.LazyArgumentMap{"f": json.RawMessage(`"` + host + `"`)}}}}
 

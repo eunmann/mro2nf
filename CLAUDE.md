@@ -59,7 +59,6 @@ internal/
   job/               → runs one stage job through mrjob as mrp runs it
   types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
-  logging/           → log/slog setup (stderr)
 ```
 
 The Martian parser is consumed as a normal module dependency, pinned by commit

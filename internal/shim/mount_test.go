@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -35,7 +36,7 @@ func mountedTree(t *testing.T) (shim.Roots, string, string) {
 // unchanged.
 func TestMountedLeafStaysItsPath(t *testing.T) {
 	roots, file, dir := mountedTree(t)
-	params := fields(t, "f file", "d path")
+	params := typestest.Fields(t, "f file", "d path")
 	payload := map[string]any{"f": file, "d": dir}
 
 	work := t.TempDir()
@@ -136,7 +137,7 @@ func TestMountHolds(t *testing.T) {
 // a target outside the task.
 func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 	roots, file, _ := mountedTree(t)
-	params := fields(t, "out file")
+	params := typestest.Fields(t, "out file")
 
 	work := t.TempDir()
 	link := filepath.Join(work, "main", "files", "r1.fastq")

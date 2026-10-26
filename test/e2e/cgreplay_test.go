@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -25,15 +26,19 @@ import (
 )
 
 // TestMrpCallGraph runs each mrp-diff fixture under real mrp and replays its
-// pipestance through the call-graph data plane: in DAG order, every stage
-// instance runs its tasks through `mre stage` as a local run's tasks do,
-// reading host entry inputs in place, from only
-// what the instance stages (its fork elements and its parents' posted
-// outs): each task builds the instance's args, the task that runs its
-// first job reporting it disabled, each task runs its phase's job through
-// mrjob, and the task that runs its last job posts its outs and the fork
-// elements downstream instances fan out over; `mre outs` then resolves the
-// pipeline outs. It requires:
+// pipestance through the call-graph data plane as the driver wires it from
+// the topology (cg.Topology): node by node in its order, every stage
+// instance, enumerated root by root from its roots' fork elements and keyed
+// by their ordinals as FORK keys it, runs its tasks through `mre stage` as
+// a local run's tasks do, reading host entry inputs in place, from only
+// what the instance stages: its fork elements, the partner elements it zips
+// (ZIP), and of each node it reads, the outputs the read names of the
+// instances the read's patterns give it (READ, GATHER, NEEDS). Each task
+// builds the instance's args, the task that runs its first job reporting
+// it disabled, each task runs its phase's job through mrjob, and the task
+// that runs its last job posts its outs and the fork elements downstream
+// instances fan out over; `mre outs` then resolves the pipeline outs from
+// the outputs the topology's outs read (PUBLISHED). It requires:
 //   - every instance's _args, resolved in-process from the same items,
 //     equal to mrp's after both are re-encoded and
 //     file leaves are reduced to name and content digest, and its disabled
@@ -79,7 +84,6 @@ type cgReplay struct {
 	t       *testing.T
 	fixture string
 	g       *cg.Graph
-	call    *syntax.CallGraphPipeline
 	dir     string
 	mro     string
 	tmp     string
@@ -100,17 +104,19 @@ type cgReplay struct {
 	// fork of a stage whose fork root has no fork under the forks of the
 	// roots before it, where mrp keeps a disabled placeholder.
 	placeholderDirs map[string]bool
-	// off holds the stage nodes the topology disables outright, whose
-	// forks mrp does not expand from a stage's outs.
-	off  map[string]bool
-	seq  int
-	jobs int
+	topo            cg.Topology
+	nodes           map[string]cg.TopoNode
+	roots           map[string]cg.TopoRoot
+	seq             int
+	jobs            int
 }
 
-// postedInstance is one stage instance its last task posted: its outs and
-// the elements it feeds, each as dirs and as value records.
+// postedInstance is one stage instance its last task posted: its fork and
+// key, its outs and the elements it feeds, each as dirs and as value
+// records.
 type postedInstance struct {
 	fork                                cg.Fork
+	key                                 []int
 	outs, outsValues, forks, forkValues string
 }
 
@@ -121,11 +127,13 @@ type replayedFork struct {
 }
 
 // replayInstance is one stage instance to replay: the fork element items
-// it gets, dirs it stages and value records, and the fork they give it.
+// it gets, dirs it stages and value records, the fork they give it, and its
+// key, its ordinal of each of its node's roots.
 type replayInstance struct {
 	elems []string
 	fork  cg.Fork
 	lens  []int
+	key   []int
 }
 
 // replayTasks are the files an instance's tasks share below its dir work:
@@ -180,18 +188,8 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 		t.Fatal(err)
 	}
 
-	_, _, ast, err := syntax.Compile(mro, []string{dir}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	call, err := ast.MakePipelineCallGraph("", ast.Call)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	rp := &cgReplay{
-		t: t, fixture: fixture, g: g, call: call, dir: dir, mro: mro, tmp: tmp,
+		t: t, fixture: fixture, g: g, dir: dir, mro: mro, tmp: tmp,
 		ps:              filepath.Join(tmp, "mrp"),
 		entry:           filepath.Join(tmp, "cg", "entry"),
 		adapters:        adapters,
@@ -199,16 +197,20 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 		ours:            map[string]replayedFork{},
 		refs:            map[string][]string{},
 		placeholderDirs: map[string]bool{},
-		off:             map[string]bool{},
+		nodes:           map[string]cg.TopoNode{},
+		roots:           map[string]cg.TopoRoot{},
 	}
 
-	topo, err := g.Topology()
-	if err != nil {
+	if rp.topo, err = g.Topology(); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, n := range topo.Nodes {
-		rp.off[n.Fqid] = n.Off
+	for _, n := range rp.topo.Nodes {
+		rp.nodes[n.Fqid] = n
+	}
+
+	for _, r := range rp.topo.Roots {
+		rp.roots[r.Fqid] = r
 	}
 
 	return rp
@@ -221,9 +223,14 @@ func (rp *cgReplay) run() {
 
 	ran, off := 0, 0
 
-	for _, st := range rp.stageOrder() {
-		for _, in := range rp.instances(st, 0, replayInstance{}) {
-			if rp.replay(st, in) {
+	for _, n := range rp.topo.Nodes {
+		st, err := rp.g.Stage(n.Fqid)
+		if err != nil {
+			rp.t.Fatal(err)
+		}
+
+		for _, in := range rp.instances(st, n, 0, replayInstance{}) {
+			if rp.replay(st, n, in) {
 				off++
 			} else {
 				ran++
@@ -234,77 +241,6 @@ func (rp *cgReplay) run() {
 	rp.checkCore()
 	rp.checkPipelineOuts()
 	rp.t.Logf("call graph replay: %d instance _args equal mrp's, %d instances disabled, %d jobs run through mre stage", ran, off, rp.jobs)
-}
-
-// stageOrder lists the stage nodes so each follows the stages it reads and
-// the producers of its fork roots.
-func (rp *cgReplay) stageOrder() []*syntax.CallGraphStage {
-	var ids []string
-
-	for fqid, n := range rp.call.NodeClosure() {
-		if _, ok := n.(*syntax.CallGraphStage); ok {
-			ids = append(ids, fqid)
-		}
-	}
-
-	slices.Sort(ids)
-
-	done := map[string]bool{}
-
-	var out []*syntax.CallGraphStage
-
-	var visit func(string)
-
-	visit = func(id string) {
-		if done[id] {
-			return
-		}
-
-		done[id] = true
-
-		st, err := rp.g.Stage(id)
-		if err != nil {
-			rp.t.Fatal(err)
-		}
-
-		for _, d := range stageDeps(rp.g, st) {
-			visit(d)
-		}
-
-		out = append(out, st)
-	}
-
-	for _, id := range ids {
-		visit(id)
-	}
-
-	return out
-}
-
-func stageDeps(g *cg.Graph, st *syntax.CallGraphStage) []string {
-	exps := make([]syntax.Exp, 0, len(st.ResolvedInputs())+len(st.Disabled()))
-
-	for _, rb := range st.ResolvedInputs() {
-		exps = append(exps, rb.Exp)
-	}
-
-	exps = append(exps, st.Disabled()...)
-
-	set := map[string]bool{}
-
-	for _, e := range exps {
-		for _, r := range e.FindRefs() {
-			set[r.Id] = true
-		}
-	}
-
-	for _, r := range st.ForkRoots() {
-		if p, ok := g.Producer(r); ok {
-			set[p] = true
-		}
-	}
-
-	return sortedKeys(set)
 }
 
 // placeholders are the dirs mrp may keep its disabled placeholder of st's
@@ -337,26 +273,31 @@ func (rp *cgReplay) forkID(node string, f cg.Fork, lens []int) string {
 	return id
 }
 
-// instances enumerates st's instances root by root from the fork elements
-// the root's feeder posted: its producer's instances, or the entry.
-func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayInstance) []replayInstance {
-	roots := st.ForkRoots()
-	if i == len(roots) {
+// instances enumerates the instances of st, node n, root by root as FORK
+// does: each instance so far joins every fork of the next root whose
+// ordinals of the root's outer roots are its own.
+func (rp *cgReplay) instances(st *syntax.CallGraphStage, n cg.TopoNode, i int, prefix replayInstance) []replayInstance {
+	if i == len(n.Roots) {
 		return []replayInstance{prefix}
 	}
 
+	root := st.ForkRoots()[i]
+	outer := at(prefix.key, positions(n.Roots, rp.roots[n.Roots[i]].Outer))
+
 	var found []replayInstance
 
-	for _, item := range rp.elementItems(roots[i]) {
-		el := rp.element(item)
-
-		if forkAgrees(el.Fork, prefix.fork) {
-			found = append(found, replayInstance{
-				elems: append(slices.Clip(prefix.elems), item),
-				fork:  append(slices.Clip(prefix.fork), cg.Part{Root: roots[i], Index: el.Fork[len(el.Fork)-1].Index}),
-				lens:  append(slices.Clip(prefix.lens), el.Lens[len(el.Lens)-1]),
-			})
+	for _, f := range rp.rootForks(rp.roots[n.Roots[i]]) {
+		if !slices.Equal(f.outer, outer) {
+			continue
 		}
+
+		el := rp.element(f.item)
+		found = append(found, replayInstance{
+			elems: append(slices.Clip(prefix.elems), f.item),
+			fork:  append(slices.Clip(prefix.fork), cg.Part{Root: root, Index: el.Fork[len(el.Fork)-1].Index}),
+			lens:  append(slices.Clip(prefix.lens), el.Lens[len(el.Lens)-1]),
+			key:   append(slices.Clip(prefix.key), f.own),
+		})
 	}
 
 	if len(found) == 0 {
@@ -368,48 +309,120 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 	var out []replayInstance
 
 	for _, f := range found {
-		out = append(out, rp.instances(st, i+1, f)...)
+		out = append(out, rp.instances(st, n, i+1, f)...)
 	}
 
 	return out
 }
 
-// elementItems are root's fork element items its feeder posted: element
-// dirs and value records of its producer's instances, or the entry's
-// element dirs.
-func (rp *cgReplay) elementItems(root *syntax.CallGraphStage) []string {
-	var feeders []postedInstance
+// rootFork is one fork of a root as ELEMENTS gives it: its ordinals of the
+// root's outer roots, its own ordinal, and its element item.
+type rootFork struct {
+	outer []int
+	own   int
+	item  string
+}
 
-	if p, ok := rp.g.Producer(root); ok {
-		feeders = rp.posted[p]
-	} else {
-		feeders = []postedInstance{{forks: rp.entry}}
+// rootForks are r's forks its feeder posted, as ELEMENTS reads them: of
+// each outer root, the producer's ordinal where the producer is forked on
+// it, else the ordinal the item's name carries, then the item's own; the
+// entry's element dirs for an entry-fed root.
+func (rp *cgReplay) rootForks(r cg.TopoRoot) []rootFork {
+	feeders, from := []postedInstance{{forks: rp.entry}}, slices.Repeat([]int{-1}, len(r.Outer))
+	if r.Producer != "" {
+		feeders, from = rp.posted[r.Producer], positions(rp.nodes[r.Producer].Roots, r.Outer)
 	}
 
-	var out []string
+	var out []rootFork
 
 	for _, f := range feeders {
-		ms, err := filepath.Glob(filepath.Join(f.forks, root.Fqid, "*"))
-		if err != nil {
-			rp.t.Fatal(err)
-		}
+		for _, item := range rp.postedItems(f.forks, f.forkValues, r.Fqid) {
+			name, _, _ := strings.Cut(itemName(item), "@")
+			ords := ordinals(rp.t, name)
+			named := ords[:len(ords)-1]
 
-		out = append(out, ms...)
-
-		if f.forkValues == "" {
-			continue
-		}
-
-		raw, err := os.ReadFile(f.forkValues)
-		if err != nil {
-			rp.t.Fatal(err)
-		}
-
-		for rec := range strings.FieldsSeq(string(raw)) {
-			if strings.HasPrefix(rec, root.Fqid+"/") {
-				out = append(out, rec)
+			outer := make([]int, len(from))
+			for x, a := range from {
+				if a >= 0 {
+					outer[x] = f.key[a]
+				} else {
+					outer[x], named = named[0], named[1:]
+				}
 			}
+
+			out = append(out, rootFork{outer: outer, own: ords[len(ords)-1], item: item})
 		}
+	}
+
+	return out
+}
+
+// postedItems are the items a post wrote below parent: the dirs below it in
+// dirs, and its value records in the file at values, if any.
+func (rp *cgReplay) postedItems(dirs, values, parent string) []string {
+	out, err := filepath.Glob(filepath.Join(dirs, parent, "*"))
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	if values == "" {
+		return out
+	}
+
+	for _, rec := range rp.records(values) {
+		if strings.HasPrefix(rec, parent+"/") {
+			out = append(out, rec)
+		}
+	}
+
+	return out
+}
+
+// itemName names an item as the driver's itemName does: a dir's base name,
+// or the name of a value record, before its colon.
+func itemName(item string) string {
+	if filepath.IsAbs(item) {
+		return filepath.Base(item)
+	}
+
+	name, _, _ := strings.Cut(item, ":")
+
+	return path.Base(name)
+}
+
+// ordinals are the dot-separated ordinals of an element's name.
+func ordinals(t *testing.T, name string) []int {
+	t.Helper()
+
+	var out []int
+
+	for f := range strings.SplitSeq(name, ".") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			t.Fatalf("element name %q: %v", name, err)
+		}
+
+		out = append(out, n)
+	}
+
+	return out
+}
+
+// positions are the positions in roots of each of xs, -1 for one it lacks.
+func positions(roots, xs []string) []int {
+	out := make([]int, len(xs))
+	for x, r := range xs {
+		out[x] = slices.Index(roots, r)
+	}
+
+	return out
+}
+
+// at is key's ordinals at positions xs, k[at].
+func at(key, xs []int) []int {
+	out := make([]int, len(xs))
+	for x, p := range xs {
+		out[x] = key[p]
 	}
 
 	return out
@@ -452,10 +465,10 @@ func forkAgrees(a, b cg.Fork) bool {
 // mrp's, and reports whether it is disabled, which its first task reports
 // by refusing it before its job runs: as the driver runs no task of a
 // disabled instance, it posts nothing.
-func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
+func (rp *cgReplay) replay(st *syntax.CallGraphStage, n cg.TopoNode, in replayInstance) bool {
 	rp.seq++
 	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
-	items := slices.Concat(in.elems, rp.upstreamOuts(st, in.fork))
+	items := slices.Concat(in.elems, rp.zips(n, in), rp.reads(n, in.key))
 	rp.stageRefs(tasks.refs, items)
 	tasks.items, tasks.in = items, rp.itemFlags(tasks.work, items)
 
@@ -487,7 +500,7 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.ours[rel] = replayedFork{args: rp.checkArgs(rel, args, mrpArgs, mrpErr)}
 	rp.runStage(st, rel, tasks)
 	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{
-		fork: inst.Fork, outs: tasks.outs, outsValues: tasks.outsValues, forks: tasks.forks, forkValues: tasks.forkValues,
+		fork: inst.Fork, key: in.key, outs: tasks.outs, outsValues: tasks.outsValues, forks: tasks.forks, forkValues: tasks.forkValues,
 	})
 	rp.indexRefs(filepath.Dir(tasks.outs), tasks.outsRefs)
 	rp.indexRefs(tasks.forks, tasks.forkRefs)
@@ -666,36 +679,20 @@ func (rp *cgReplay) checkArgs(rel string, got json.RawMessage, want []byte, want
 	return got
 }
 
-// upstreamOuts are the posted outs an instance stages: those of each stage
-// its bindings read, at the forks that agree with the instance's, less a
-// producer it reads only through splits of a root's own source, which its
-// fork elements serve. A split of any other output resolves from the outs.
-func (rp *cgReplay) upstreamOuts(st *syntax.CallGraphStage, fork cg.Fork) []string {
-	elemOnly := map[*syntax.CallStm]string{}
-
-	for _, r := range st.ForkRoots() {
-		own, isRef := r.Split().Value.(*syntax.RefExp)
-		if p, ok := rp.g.Producer(r); ok && isRef {
-			elemOnly[r.Call()] = p + "." + own.OutputId
-		}
-	}
-
-	read := map[string]bool{}
-
-	for _, rb := range st.ResolvedInputs() {
-		refsOutsideSplits(rb.Exp, elemOnly, read)
-	}
-
-	for _, d := range st.Disabled() {
-		refsOutsideSplits(d, elemOnly, read)
-	}
-
+// reads are the outs items the instance of node n at key stages: of each
+// node it reads, the outputs the read names of every instance one of the
+// read's patterns gives it (readsInstance), in the upstream's key order,
+// as READ, GATHER and NEEDS stage them.
+func (rp *cgReplay) reads(n cg.TopoNode, key []int) []string {
 	var out []string
 
-	for _, u := range sortedKeys(read) {
-		for _, pi := range rp.posted[u] {
-			if forkAgrees(pi.fork, fork) {
-				out = append(append(out, rp.fields(pi)...), rp.records(pi.outsValues)...)
+	for _, r := range n.Reads {
+		ups := slices.Clone(rp.posted[r.Node])
+		slices.SortFunc(ups, func(a, b postedInstance) int { return slices.Compare(a.key, b.key) })
+
+		for _, pi := range ups {
+			if readsInstance(n, rp.nodes[r.Node], r.Patterns, key, pi.key) {
+				out = append(out, rp.selected(pi, r.Fields)...)
 			}
 		}
 	}
@@ -703,63 +700,93 @@ func (rp *cgReplay) upstreamOuts(st *syntax.CallGraphStage, fork cg.Fork) []stri
 	return out
 }
 
-// fields are the output bundles the instance posted.
-func (rp *cgReplay) fields(pi postedInstance) []string {
+// readsInstance reports whether node n's instance at key k reads node u's
+// at ku: whether, of one of the read's patterns ps, none for every instance
+// under the roots they share, k meets its limits and ku's ordinal of each
+// root of u that n shares, or that the pattern aligns with a root of n, is
+// k's of that root (cgnf read, joinOn, needed).
+func readsInstance(n, u cg.TopoNode, ps []cg.ReadPattern, k, ku []int) bool {
+	if len(ps) == 0 {
+		ps = []cg.ReadPattern{{}}
+	}
+
+	return slices.ContainsFunc(ps, func(p cg.ReadPattern) bool {
+		for root, ords := range p.When {
+			if !slices.Contains(ords, k[slices.Index(n.Roots, root)]) {
+				return false
+			}
+		}
+
+		for x, root := range u.Roots {
+			mine := slices.Index(n.Roots, root)
+			if aligned, ok := p.Align[root]; ok {
+				mine = slices.Index(n.Roots, aligned)
+			}
+
+			if mine >= 0 && k[mine] != ku[x] {
+				return false
+			}
+		}
+
+		return true
+	})
+}
+
+// zips are the partner elements the instance in of node n stages, as ZIP
+// adds them: of each zip, the element at the instance's index token of the
+// zipped root posted by the zipped node's instance at its ordinals of that
+// node's roots, or that instance's absent record.
+func (rp *cgReplay) zips(n cg.TopoNode, in replayInstance) []string {
+	var out []string
+
+	for _, z := range n.Zips {
+		q := rp.nodes[z.Node]
+		want := at(in.key, positions(n.Roots, q.Roots))
+		token := cg.IndexToken(in.fork[slices.Index(n.Roots, z.Root)].Index)
+
+		for _, pi := range rp.posted[z.Node] {
+			if !slices.Equal(pi.key, want) {
+				continue
+			}
+
+			byName := map[string]string{}
+			for _, item := range rp.postedItems(pi.forks, pi.forkValues, cg.PartnerDir(z.Root, z.Node, z.Output)) {
+				byName[itemName(item)] = item
+			}
+
+			if item, ok := byName[token]; ok {
+				out = append(out, item)
+			} else if item, ok := byName[cg.AbsentName]; ok {
+				out = append(out, item)
+			}
+		}
+	}
+
+	return out
+}
+
+// selected are the outs items an instance posted of the outputs fields
+// names, every output where fields is nil, as the driver's selected picks
+// them: its output bundles, then its value records.
+func (rp *cgReplay) selected(pi postedInstance, fields []string) []string {
 	dirs, err := filepath.Glob(filepath.Join(pi.outs, "*"))
 	if err != nil {
 		rp.t.Fatal(err)
 	}
 
-	return dirs
+	return slices.DeleteFunc(append(dirs, rp.records(pi.outsValues)...), func(item string) bool {
+		return fields != nil && !slices.Contains(fields, itemName(item))
+	})
 }
 
-// records are the value records a post wrote to the file at path.
-func (rp *cgReplay) records(path string) []string {
-	raw, err := os.ReadFile(path)
+// records are the value records a post wrote to the file at file.
+func (rp *cgReplay) records(file string) []string {
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		rp.t.Fatal(err)
 	}
 
 	return strings.Fields(string(raw))
-}
-
-// refsOutsideSplits collects the stages e reads other than through a split
-// of a root's own source, elemOnly's <producer>.<output> by the root's call.
-func refsOutsideSplits(e syntax.Exp, elemOnly map[*syntax.CallStm]string, read map[string]bool) {
-	switch x := e.(type) {
-	case *syntax.SplitExp:
-		if ref, ok := x.Value.(*syntax.RefExp); ok && elemOnly[x.Call] == ref.Id+"."+ref.OutputId {
-			return
-		}
-
-		refsOutsideSplits(x.Value, elemOnly, read)
-	case *syntax.RefExp:
-		read[x.Id] = true
-	case *syntax.ArrayExp:
-		for _, v := range x.Value {
-			refsOutsideSplits(v, elemOnly, read)
-		}
-	case *syntax.MapExp:
-		for _, v := range x.Value {
-			refsOutsideSplits(v, elemOnly, read)
-		}
-	case *syntax.MergeExp:
-		refsOutsideSplits(x.Value, elemOnly, read)
-
-		if x.ForkNode != nil {
-			read[x.ForkNode.Id] = true
-		}
-
-		// A disabled instance posts no outs, so a merge over a root whose
-		// forks a stage fixes counts them from the root's source, as the
-		// run's tasks do (cg.Topology).
-		if sp := x.Call.Split(); sp != nil && !sp.Source.KnownLength() {
-			refsOutsideSplits(sp.Value, nil, read)
-		}
-	case *syntax.DisabledExp:
-		refsOutsideSplits(x.Disabled, elemOnly, read)
-		refsOutsideSplits(x.Value, elemOnly, read)
-	}
 }
 
 // jobInfoStable are the _jobinfo keys whose values are the same every run;
@@ -996,7 +1023,7 @@ func (rp *cgReplay) mrpDisabledAt(st *syntax.CallGraphStage, rel string) bool {
 		return true
 	}
 
-	if _, err := os.Stat(filepath.Join(rp.ps, rel)); !rp.off[st.Fqid] || !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(rp.ps, rel)); !rp.nodes[st.Fqid].Off || !errors.Is(err, os.ErrNotExist) {
 		return false
 	}
 
@@ -1090,15 +1117,11 @@ func (rp *cgReplay) checkPipelineOuts() {
 }
 
 // stageOutsItems stages into in the skeleton of each outs bundle the
-// topology's outs read, as in/u<i>, and returns the bundles, the value
-// records, and the locations lines of the skeletons.
+// topology's outs read, of the outputs each read names (PUBLISHED), as
+// in/u<i>, and returns the bundles, the value records, and the locations
+// lines of the skeletons.
 func (rp *cgReplay) stageOutsItems(in string) ([]string, []string, string) {
 	rp.t.Helper()
-
-	topo, err := rp.g.Topology()
-	if err != nil {
-		rp.t.Fatal(err)
-	}
 
 	if err := os.MkdirAll(in, 0o755); err != nil {
 		rp.t.Fatal(err)
@@ -1108,14 +1131,18 @@ func (rp *cgReplay) stageOutsItems(in string) ([]string, []string, string) {
 
 	var values, items []string
 
-	for _, r := range topo.Outs {
+	for _, r := range rp.topo.Outs {
 		for _, pi := range rp.posted[r.Node] {
-			for _, d := range rp.fields(pi) {
-				items = append(items, d)
-				lines.WriteString(rp.stageSkeleton(filepath.Join(in, "u"+strconv.Itoa(len(items))), d))
-			}
+			for _, it := range rp.selected(pi, r.Fields) {
+				if !filepath.IsAbs(it) {
+					values = append(values, it)
 
-			values = append(values, rp.records(pi.outsValues)...)
+					continue
+				}
+
+				items = append(items, it)
+				lines.WriteString(rp.stageSkeleton(filepath.Join(in, "u"+strconv.Itoa(len(items))), it))
+			}
 		}
 	}
 

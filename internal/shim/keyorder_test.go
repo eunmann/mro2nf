@@ -9,6 +9,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -84,7 +85,7 @@ func TestWriteItemKeepsKeyOrder(t *testing.T) {
 
 	out := filepath.Join(dir, "out")
 
-	if _, err := shim.WriteItem(out, map[string]any{"cfg": cfg, "b": 1}, fields(t, "cfg Cfg"), types.NewTable(&ast.TypeTable), shim.Opts{}, shim.Staged{}); err != nil {
+	if _, err := shim.WriteItem(out, map[string]any{"cfg": cfg, "b": 1}, typestest.Fields(t, "cfg Cfg"), types.NewTable(&ast.TypeTable), shim.Opts{}, shim.Staged{}); err != nil {
 		t.Fatalf("WriteItem: %v", err)
 	}
 
