@@ -60,8 +60,10 @@ flowchart LR
     job --> chunks["split: chunk defs + resources.tsv<br/>main of a split stage: chunk outs"]
 ```
 
-- Every phase first resolves the instance and its args from what its task
-  staged, each file leaf linked below `-args`, as no other task stages it.
+- Every phase first restores what the shapes of the leaves its task staged
+  record ([Shapes](bundles.md#shapes)), then resolves the instance and its
+  args from what its task staged, each file leaf linked below `-args`, as no
+  other task stages it.
 - It then runs its job.
 - A join, or a non-split stage's main, then posts the outputs its job wrote.
 - A split's chunk mains and join stage the split's inputs and resolve the same
@@ -237,9 +239,12 @@ JSON follow `mrp`'s rules by construction.
 4. **Manifest** (`-manifest`): each entry a file or a placed directory, whole,
    and a link as what it reaches, by its path in the tree and where the task
    that wrote it keeps it, or, for a file no stage task wrote, its copy in
-   `external/`. `PostProcess`'s rename keeps a placed path's identity (device
-   and inode), which maps it to the file it was placed from. It places each
-   file as its shape (`shim.CopyShape`), never its bytes.
+   `external/`. A placed directory holding an empty directory is listed entry
+   by entry instead, each empty directory as an empty directory in
+   `external/` that the driver makes again before publishing it, as no object
+   store holds one (#624). `PostProcess`'s rename keeps a placed path's
+   identity (device and inode), which maps it to the file it was placed from.
+   It places each file as its shape (`shim.CopyShape`), never its bytes.
 5. **Outs JSON** (`-json`): naming a published file by its path in the tree,
    a linked one by its own link's path, and a file left unpublished (below an
    array of two or more dimensions) by where its producer's work directory
@@ -248,7 +253,10 @@ JSON follow `mrp`'s rules by construction.
    wrote is named below the work directory of the task that posted it
    (`task.json`), which a scratch directory is not.
 
-A staged skeleton (`-in`, `-refs`) is expanded in place.
+A staged skeleton (`-in`, `-refs`) is expanded in place, and the shapes of
+its leaves restored ([Shapes](bundles.md#shapes)). A link a stage wrote that
+reaches nothing, in a directory the outs publish, fails the manifest, naming
+the link.
 
 ## How it is checked against `mrp`
 

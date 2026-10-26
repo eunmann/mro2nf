@@ -377,7 +377,22 @@ def refBundles(List items) {
 // stage task wrote, as Nextflow publishes no other file. A stage chooses
 // its files' names, so the driver globs none.
 def published(Path p) {
-    return new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [e.local ? p.resolve(e.source) : file(e.source, glob: false), e.path] }
+    return new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [publishedSource(p, e), e.path] }
+}
+
+// publishedSource is the source of the manifest entry e. An empty dir
+// (e.dir) OUTS made below p the driver makes again, as an upload to an
+// object store creates no object for an empty dir, and nf-amazon makes a
+// dir as an empty `<key>/` object.
+def publishedSource(Path p, Map e) {
+    if (!e.local) {
+        return file(e.source, glob: false)
+    }
+    def src = p.resolve(e.source)
+    if (e.dir) {
+        src.mkdirs()
+    }
+    return src
 }
 
 // OUTS resolves the pipeline outs from the stage outs and the entry files

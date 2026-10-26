@@ -31,7 +31,8 @@ type skeletonEntry struct {
 // writeSkeleton writes the skeleton of the bundle dir into it. It walks
 // the bundle as copyTree copies a tree, following links and leaving out a
 // dangling one, so a leaf dir's skeleton holds what its copy would. The
-// files at the bundle's top and each leaf's origin record are records.
+// files at the bundle's top and each leaf's origin and shape records are
+// records, so a link a leaf's shape records reaches its expansion.
 func writeSkeleton(dir string) error {
 	var entries []skeletonEntry
 
@@ -94,11 +95,12 @@ func skeletonWalk(src, rel string, top bool, out *[]skeletonEntry, ancestors map
 }
 
 // skeletonFile adds the file at src, at rel in the bundle, with its content
-// when it is a record: a file at the bundle's top, or a leaf's origin.
+// when it is a record: a file at the bundle's top, or a leaf's origin or
+// shape.
 func skeletonFile(src, rel string, top bool, out *[]skeletonEntry) error {
 	e := skeletonEntry{Path: rel}
 
-	if top || path.Base(rel) == originFile {
+	if top || ordinalRecord(rel) {
 		raw, err := os.ReadFile(src)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", src, err)
@@ -113,17 +115,35 @@ func skeletonFile(src, rel string, top bool, out *[]skeletonEntry) error {
 	return nil
 }
 
-// CopyShape writes at dst the shape of the tree at src: each dir, and an
-// empty file at each file, links followed and a dangling one left out, as
-// CopyTree copies the tree. It reads no file's bytes.
+// ordinalRecord reports whether the bundle path rel is a record in a leaf's
+// ordinal dir, beside the leaf.
+func ordinalRecord(rel string) bool {
+	base := path.Base(rel)
+
+	return path.Dir(path.Dir(rel)) == bundleFiles && (base == originFile || base == shapeFile)
+}
+
+// CopyShape writes at dst the shape of the tree at src: each dir, an empty
+// file at each file, links followed as CopyTree copies the tree, and a link
+// that reaches nothing as itself, as a reader of the leaf restores it. It
+// reads no file's bytes.
 func CopyShape(src, dst string) error {
 	return copyShape(src, dst, map[dirID]struct{}{})
 }
 
 func copyShape(src, dst string, ancestors map[dirID]struct{}) error {
 	resolved, err := resolveSymlink(src)
-	if err != nil || resolved == "" {
+	if err != nil {
 		return err
+	}
+
+	if resolved == "" {
+		target, err := os.Readlink(src)
+		if err != nil {
+			return fmt.Errorf("read link %s: %w", src, err)
+		}
+
+		return linkAt(target, dst)
 	}
 
 	info, err := os.Stat(resolved)

@@ -54,9 +54,12 @@ type pipestance struct {
 	// it at.
 	entry map[string]string
 	// sources maps each placed path, by its file's identity, which
-	// PostProcess's rename keeps, to the file the run publishes it from.
-	sources map[fileKey]placedSource
-	n       int
+	// PostProcess's rename keeps, to the file the run publishes it from,
+	// and stageLinks holds, by the link's own identity, each placed link a
+	// stage wrote that reaches nothing.
+	sources    map[fileKey]placedSource
+	stageLinks map[fileKey]struct{}
+	n          int
 }
 
 // placedSource is the file the run publishes a placed path from: a file a
@@ -149,7 +152,7 @@ func newPipestance(spec OutsSpec, items []string, shape forkShape) (*pipestance,
 		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), shape: shape,
 		locations: spec.Locations, tasks: map[string]string{},
 		origins: map[string]string{}, placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
-		entry: spec.EntryFiles, sources: map[fileKey]placedSource{},
+		entry: spec.EntryFiles, sources: map[fileKey]placedSource{}, stageLinks: map[fileKey]struct{}{},
 	}
 	p.outs = filepath.Join(p.dir, "outs")
 
@@ -329,19 +332,31 @@ func (p *pipestance) copy(leaf, root string, src placedSource) (string, error) {
 }
 
 // recordSources records the source of each path of the tree placed at at:
-// src, and below it, the same path below src.
+// src, and below it, the same path below src. A link there is one the
+// stage wrote that reaches nothing, as CopyShape places every other link's
+// target.
 func (p *pipestance) recordSources(at string, src placedSource) error {
-	err := filepath.WalkDir(at, func(path string, _ fs.DirEntry, err error) error {
+	err := filepath.WalkDir(at, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		k, err := keyOf(path)
-		if err != nil {
-			return err
+		link := d.Type()&fs.ModeSymlink != 0
+
+		stat := os.Stat
+		if link {
+			stat = os.Lstat
 		}
 
-		p.sources[k] = src.below(strings.TrimPrefix(path, at))
+		k, err := keyOf(path, stat)
+		switch {
+		case err != nil:
+			return err
+		case link:
+			p.stageLinks[k] = struct{}{}
+		default:
+			p.sources[k] = src.below(strings.TrimPrefix(path, at))
+		}
 
 		return nil
 	})
@@ -352,13 +367,18 @@ func (p *pipestance) recordSources(at string, src placedSource) error {
 	return nil
 }
 
-// keyOf is the identity of the file at path, its links followed.
-func keyOf(path string) (fileKey, error) {
-	info, err := os.Stat(path)
+// keyOf is the identity of the file at path, as stat reads it.
+func keyOf(path string, stat func(string) (fs.FileInfo, error)) (fileKey, error) {
+	info, err := stat(path)
 	if err != nil {
 		return fileKey{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 
+	return identity(path, info)
+}
+
+// identity is the identity of the file at path that info describes.
+func identity(path string, info fs.FileInfo) (fileKey, error) {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fileKey{}, fmt.Errorf("%w: %s", errNoIdentity, path)
@@ -516,17 +536,21 @@ const externalDir = "external"
 
 // published is one entry of the published tree: its path in the tree and
 // the file the run publishes it from, where the task that wrote it keeps
-// it, or, Local, a path beside the manifest.
+// it, or, Local, a path beside the manifest. Dir is an empty dir beside
+// the manifest, which the driver makes again before it publishes it, as
+// an object store keeps no empty dir of OUTS's upload.
 type published struct {
 	Path   string `json:"path"`
 	Source string `json:"source"`
 	Local  bool   `json:"local,omitempty"`
+	Dir    bool   `json:"dir,omitempty"`
 }
 
 // manifest writes to path the published tree at outs/ as the entries the
 // run publishes, by path: each file PostProcess moved or linked into
 // outs/, a link as what it reaches, since a publish dir may be an object
-// store, and a placed dir whole.
+// store, and a placed dir whole, but for one holding an empty dir, whose
+// entries it lists each (placedEntries).
 func (p *pipestance) manifest(path string) error {
 	entries, err := p.entries(filepath.Dir(path))
 	if err != nil {
@@ -559,14 +583,25 @@ func (p *pipestance) entries(dir string) ([]published, error) {
 			return err
 		}
 
-		e, err := p.publishedAt(rel, src, dir)
+		if !whole {
+			e, err := p.publishedAt(rel, src, dir)
+			if err != nil {
+				return err
+			}
+
+			entries = append(entries, e)
+
+			return nil
+		}
+
+		es, err := p.placedEntries(at, rel, src, dir)
 		if err != nil {
 			return err
 		}
 
-		entries = append(entries, e)
+		entries = append(entries, es...)
 
-		if whole {
+		if d.IsDir() {
 			return filepath.SkipDir
 		}
 
@@ -577,6 +612,105 @@ func (p *pipestance) entries(dir string) ([]published, error) {
 	}
 
 	return entries, nil
+}
+
+// placedEntries are the entries of the placed dir at at, rel in outs/,
+// published from src: the dir whole, or, where it holds an empty dir,
+// which a copy of the dir from an object store does not carry, each of its
+// entries, an empty dir as itself (emptyDirAt). No entry lies below
+// another, which Nextflow would publish over it.
+func (p *pipestance) placedEntries(at, rel string, src placedSource, dir string) ([]published, error) {
+	names, err := os.ReadDir(at)
+	if err != nil {
+		return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+	}
+
+	if len(names) == 0 {
+		e, err := p.emptyDirAt(rel, dir)
+
+		return []published{e}, err
+	}
+
+	hollow, err := holdsEmptyDir(at)
+	if err != nil {
+		return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+	}
+
+	if !hollow {
+		e, err := p.publishedAt(rel, src, dir)
+
+		return []published{e}, err
+	}
+
+	var out []published
+
+	for _, n := range names {
+		childAt, childRel, childSrc := filepath.Join(at, n.Name()), rel+"/"+n.Name(), src.below(string(filepath.Separator)+n.Name())
+
+		info, err := os.Stat(childAt)
+		if err != nil {
+			return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+		}
+
+		var es []published
+		if info.IsDir() {
+			es, err = p.placedEntries(childAt, childRel, childSrc, dir)
+		} else {
+			var e published
+			e, err = p.publishedAt(childRel, childSrc, dir)
+			es = []published{e}
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, es...)
+	}
+
+	return out, nil
+}
+
+// holdsEmptyDir reports whether dir is or holds an empty dir.
+func holdsEmptyDir(dir string) (bool, error) {
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return false, fmt.Errorf("read dir %s: %w", dir, err)
+	}
+
+	if len(names) == 0 {
+		return true, nil
+	}
+
+	for _, n := range names {
+		info, err := os.Stat(filepath.Join(dir, n.Name()))
+		if err != nil {
+			return false, fmt.Errorf("stat %s: %w", filepath.Join(dir, n.Name()), err)
+		}
+
+		if !info.IsDir() {
+			continue
+		}
+
+		if hollow, err := holdsEmptyDir(filepath.Join(dir, n.Name())); err != nil || hollow {
+			return hollow, err
+		}
+	}
+
+	return false, nil
+}
+
+// emptyDirAt is the entry of the empty dir at rel in the tree: an empty
+// dir below dir, external/<n>/, which the run publishes as the empty dir.
+func (p *pipestance) emptyDirAt(rel, dir string) (published, error) {
+	p.n++
+	local := path.Join(externalDir, strconv.Itoa(p.n), path.Base(rel))
+
+	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(local)), dirPerm); err != nil {
+		return published{}, fmt.Errorf("publish outs/%s: %w", rel, err)
+	}
+
+	return published{Path: rel, Source: local, Local: true, Dir: true}, nil
 }
 
 // publishedAt is the entry at rel in the tree published from src: a file
@@ -607,13 +741,16 @@ func (p *pipestance) publishedAt(rel string, src placedSource, dir string) (publ
 // is a placed dir, published whole; none for a dir PostProcess made, whose
 // entries are published each.
 func (p *pipestance) source(at, rel string, d fs.DirEntry) (placedSource, bool, error) {
-	if d.Type()&fs.ModeSymlink != 0 {
-		if _, err := os.Stat(at); err != nil {
-			return placedSource{}, false, danglingLink(rel, err)
-		}
+	info, err := os.Stat(at)
+	if err != nil && d.Type()&fs.ModeSymlink != 0 {
+		return placedSource{}, false, p.danglingLink(at, rel, err)
 	}
 
-	k, err := keyOf(at)
+	if err != nil {
+		return placedSource{}, false, fmt.Errorf("stat %s: %w", at, err)
+	}
+
+	k, err := identity(at, info)
 	if err != nil {
 		return placedSource{}, false, err
 	}
@@ -621,28 +758,34 @@ func (p *pipestance) source(at, rel string, d fs.DirEntry) (placedSource, bool, 
 	src, ok := p.sources[k]
 
 	switch {
-	case !ok && d.IsDir():
+	case !ok && info.IsDir():
 		return placedSource{}, false, nil
 	case !ok:
 		return placedSource{}, false, fmt.Errorf("%w: outs/%s", errNoSource, rel)
-	case d.IsDir():
-		return src, true, reachesAll(at, rel)
+	case info.IsDir():
+		return src, true, p.reachesAll(at, rel)
 	default:
 		return src, false, nil
 	}
 }
 
 // reachesAll fails on a link below the placed dir at at, rel in outs/,
-// that reaches nothing: the link PostProcess leaves where it moved out an
-// entry the pipeline outs publish apart from the dir.
-func reachesAll(at, rel string) error {
-	err := filepath.WalkDir(at, func(path string, d fs.DirEntry, err error) error {
+// that reaches nothing: one its stage wrote, or the one PostProcess leaves
+// where it moved out an entry the pipeline outs publish apart from the dir.
+// The dir is PostProcess's link to it for a Linked dir.
+func (p *pipestance) reachesAll(at, rel string) error {
+	root, err := filepath.EvalSymlinks(at)
+	if err != nil {
+		return fmt.Errorf("published dir outs/%s: %w", rel, err)
+	}
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.Type()&fs.ModeSymlink == 0 {
 			return err
 		}
 
 		if _, err := os.Stat(path); err != nil {
-			return danglingLink(rel+filepath.ToSlash(strings.TrimPrefix(path, at)), err)
+			return p.danglingLink(path, rel+filepath.ToSlash(strings.TrimPrefix(path, root)), err)
 		}
 
 		return nil
@@ -654,13 +797,19 @@ func reachesAll(at, rel string) error {
 	return nil
 }
 
-// danglingLink is the error for the link at rel in outs/ that reaches nothing.
-// A link below a published directory is the one PostProcess leaves where it
-// moved out an entry that the pipeline outs publish separately from the
-// directory. The copy of a stage's directory drops its own dangling links, so
-// no other link can lie there. The message names only the link: the
-// directory may sit inside a map, struct or array output at any depth.
-func danglingLink(rel string, err error) error {
+// danglingLink is the error for the link at at, rel in outs/, that reaches
+// nothing: a stage's own (stageLink), or else, below a published directory,
+// the one PostProcess leaves where it moved out an entry that the pipeline
+// outs publish separately from the directory. The message names only the
+// link: the directory may sit inside a map, struct or array output at any
+// depth.
+func (p *pipestance) danglingLink(at, rel string, err error) error {
+	if k, kerr := keyOf(at, os.Lstat); kerr == nil {
+		if _, ok := p.stageLinks[k]; ok {
+			return stageLink(rel, err)
+		}
+	}
+
 	if !strings.Contains(rel, "/") {
 		return fmt.Errorf("%w: %w", errUnpublished, err)
 	}
@@ -668,6 +817,16 @@ func danglingLink(rel string, err error) error {
 	return fmt.Errorf("%w: outs/%s is a link that reaches nothing, left where an entry of a published directory "+
 		"was moved out because the pipeline outs also publish it separately; mrp leaves this dangling link and succeeds, "+
 		"but a results dir, possibly an object store, cannot hold it (publish the directory or the entry inside it, not both): %w",
+		errUnpublished, rel, err)
+}
+
+// stageLink is the error for the link at rel in outs/ that its stage wrote
+// reaching nothing. Nextflow publishes a copy of what a link reaches, which
+// this link has none of, and an object store holds no link.
+func stageLink(rel string, err error) error {
+	return fmt.Errorf("%w: outs/%s is a link its stage wrote that reaches nothing; mrp publishes it as it is and succeeds, "+
+		"but the run publishes copies into a results dir, possibly an object store, which cannot hold it "+
+		"(write no link that reaches nothing into a published output): %w",
 		errUnpublished, rel, err)
 }
 

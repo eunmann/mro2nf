@@ -55,6 +55,15 @@
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
     {
+      "id": "dir-dangling-link",
+      "kind": "outcome",
+      "feature": "pipeline outs publishing a directory holding a link its stage wrote that reaches nothing",
+      "summary": "When the outs publish a directory holding a link its stage wrote that reaches nothing, mrp publishes the link as the stage wrote it, and the run succeeds; mro2nf fails the run loudly, naming the link. A stage reading the directory sees the link under both, with the target the stage gave it.",
+      "justification": "The run publishes copies (Nextflow's `mode 'copy'`), and a copy of a link that reaches nothing has nothing to copy: Nextflow 26.04 fails such a publish with `NoSuchFileException`, an upload to S3 skips the link (`aws s3 cp` exits 2), and an object store holds no link. So a results dir cannot hold it, as with `dir-and-inner-file`, and publishing the directory without it would change the published tree silently.",
+      "evidence": ["TestMrpDiffFailureParity/dir_dangling_link_out", "TestWriteOutsRefusesAStageDanglingLink", "TestMrpDiff/dir_dangling_link", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
+    },
+    {
       "id": "nested-empty-forks",
       "kind": "outcome",
       "feature": "a nested map call over an outer split whose elements are all empty",

@@ -282,6 +282,8 @@ func hashFileContent(path string) (string, error) {
 
 // hashDirTree hashes a directory's relative entry names (empty subdirs
 // included) and file contents in lexical walk order, through a symlinked root.
+// A link inside that reaches nothing hashes as its target text, which a
+// reader under either runtime reads (#624).
 func hashDirTree(dir string) (string, error) {
 	root, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -305,6 +307,13 @@ func hashDirTree(dir string) (string, error) {
 			_, _ = fmt.Fprintf(h, "d %s\n", rel)
 
 			return nil
+		}
+
+		if _, err := os.Stat(p); d.Type()&fs.ModeSymlink != 0 && errors.Is(err, fs.ErrNotExist) {
+			target, err := os.Readlink(p)
+			_, _ = fmt.Fprintf(h, "l %s %s\n", rel, target)
+
+			return err
 		}
 
 		sum, err := hashFileContent(p)
