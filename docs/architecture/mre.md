@@ -14,7 +14,8 @@ It has three subcommands, one per kind of task:
 Each subcommand that works on the call graph takes:
 
 - the entry `.mro` (`-entry`, `-mropath`);
-- the run's call (`-call`), a file holding base64 of the call PLAN rebuilt,
+- the run's call (`-call`), a file holding base64 of the gzip of the call
+  PLAN rebuilt,
   which each task writes or stages, since a wide run's call would pass the
   kernel's 128 KiB limit on one argument; without it, the entry's own call;
 - the items its task staged (`-in`, an item or a directory of items), and only

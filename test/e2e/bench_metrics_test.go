@@ -216,22 +216,91 @@ func TestBenchMetricsReadsEveryStagingLink(t *testing.T) {
 	}
 }
 
-// TestBenchMetricsLeavesOutTheCall pins that the staged-bytes probe leaves
-// out call.b64, the run's call a task stages once it outgrows its script:
-// it is the invocation every mrp job's _jobinfo carries too, which grows
-// with the entry values, not orchestration staging.
-func TestBenchMetricsLeavesOutTheCall(t *testing.T) {
+// TestBenchMetricsCountsTheCall (#623) pins that the staged bytes count the
+// run's call each task gets, the call.b64 it stages once the call outgrows
+// its script or the call its script writes, while the most bytes one task
+// stages leave it out, as it is the invocation every mrp job's _jobinfo
+// carries too, which grows with the entry values, and report it apart.
+func TestBenchMetricsCountsTheCall(t *testing.T) {
 	requireTools(t, "python3")
 
 	dir := t.TempDir()
 	in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
 	call := writeBenchFile(t, filepath.Join(dir, "call.b64"), strings.Repeat("c", 5000))
 
-	writeBenchTask(t, dir, "aa/task", "WF:ST (1)", "    rm -f in.txt call.b64\n    ln -sfn "+in+" in.txt\n    ln -sfn "+call+" call.b64\n")
+	writeBenchTask(t, dir, "aa/staged", "WF:ST (1)", "    rm -f in.txt call.b64\n    ln -sfn "+in+" in.txt\n    ln -sfn "+call+" call.b64\n")
+	writeBenchTask(t, dir, "bb/inline", "WF:ST (2)", "")
+	writeBenchFile(t, filepath.Join(dir, "work", "bb", "inline", ".command.sh"),
+		"#!/bin/bash -ue\ncat > call.b64 <<'MRO2NF_CALL'\n"+strings.Repeat("c", 499)+"\nMRO2NF_CALL\nmre stage\n")
 
-	got := benchStagedMax(t, dir, "WF:ST (1)")
-	if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
-		t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
+	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\n")
+	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "2").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	type calls struct {
+		Staged    int            `json:"stage_staged_bytes"`
+		StagedMax map[string]int `json:"stage_staged_bytes_max"`
+		CallMax   map[string]int `json:"stage_call_bytes_max"`
+	}
+
+	var got calls
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	want := calls{Staged: len("abc") + 5000 + 500, StagedMax: map[string]int{"ST": len("abc")}, CallMax: map[string]int{"ST": 5000}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("call bytes (-want +got):\n%s", diff)
+	}
+}
+
+// TestBenchMetricsOutputBytes (#623) pins output_bytes, the bytes of the
+// files a stage task's declared outputs hold, each path once and no file
+// it wrote outside them, and job_bytes, those its jobs wrote into their
+// files dirs.
+func TestBenchMetricsOutputBytes(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	task := filepath.Join(dir, "work", "aa", "post")
+
+	writeBenchTaskHeader(t, dir, "aa/post", "### ---\n### name: 'WF:ST (1)'\n### outputs:\n### - 'outs/*'\n### - 'forks/*/*'\n### - 'outs/a'\n### ...", "")
+	writeBenchFile(t, filepath.Join(task, "chnk0", "_jobinfo"), "{}")
+	writeBenchFile(t, filepath.Join(task, "chnk0", "files", "data.txt"), "0123456789")
+	writeBenchFile(t, filepath.Join(task, "outs", "a", "f", "L0000", "data.txt"), "0123456789")
+	writeBenchFile(t, filepath.Join(task, "outs", "a", "data.json"), "{}")
+	writeBenchFile(t, filepath.Join(task, "forks", "R", "0000", "data.json"), "{\"x\":1}")
+	writeBenchFile(t, filepath.Join(task, "outs_values"), "unread by the count")
+
+	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\n")
+	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "1").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	type outputs struct {
+		Outputs int `json:"output_bytes"`
+		Jobs    int `json:"job_bytes"`
+	}
+
+	var got outputs
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	want := outputs{Outputs: len("0123456789") + len("{}") + len("{\"x\":1}"), Jobs: len("0123456789")}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("output and job bytes (-want +got):\n%s", diff)
 	}
 }
 

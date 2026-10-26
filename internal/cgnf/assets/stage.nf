@@ -408,9 +408,10 @@ process OUTS {
     """
 }
 
-// CALL is the run's call, base64, as every task gets it: inline, a value
-// its script writes (callScript), when it is at most bound bytes, or else
-// a file the driver writes once per run and each task stages (callStaged).
+// CALL is the run's call, base64 of its gzip, as every task gets it:
+// inline, a value its script writes (callScript), when it is at most bound
+// bytes, or else a file the driver writes once per run and each task
+// stages (callStaged).
 // The call grows with the entry values; inline, a large one would grow
 // every task's script, and the -resume key Nextflow hashes from it, while
 // a staged file costs each task on an object store a download. collectFile

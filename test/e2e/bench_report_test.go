@@ -30,6 +30,18 @@ type reportLane struct {
 	Staged    int            `json:"staged_bytes"`
 	Restaged  int            `json:"restaged_bytes"`
 	ProbeRefs int            `json:"plumbing_probe_refs,omitempty"`
+	Outputs   int            `json:"output_bytes"`
+	Jobs      int            `json:"job_bytes"`
+}
+
+// outputsPair is widthPair(2, 2, 0) with its stage tasks declaring o4 and
+// o8 output bytes over the j4 and j8 bytes their jobs wrote.
+func outputsPair(o4, j4, o8, j8 int) []reportLane {
+	lanes := widthPair(2, 2, 0)
+	lanes[0].Outputs, lanes[0].Jobs = o4, j4
+	lanes[1].Outputs, lanes[1].Jobs = o8, j8
+
+	return lanes
 }
 
 // restagedPair is widthPair(2, 2, 0) with producers p4 and p8 restaging r4
@@ -55,19 +67,21 @@ func stagingPair(s4, s8 int) []reportLane {
 }
 
 // widthPair is one fixture's lanes at widths 4 and 8, with the given plumbing
-// counts and known_scaling marker; stage tasks equal mrp jobs, and each lane
-// staged its inputs.
+// counts and known_scaling marker; stage tasks equal mrp jobs, each lane
+// staged its inputs, and its stage tasks declare as outputs the bytes their
+// jobs wrote.
 func widthPair(p4, p8, known int) []reportLane {
 	return []reportLane{
-		{Name: "x_w4", Tasks: 4 + p4, PlumbingTasks: p4, StageTasks: 4, MrpJobs: 4, KnownScaling: known, Producers: 1, Staged: 4 * 100},
-		{Name: "x_w8", Tasks: 8 + p8, PlumbingTasks: p8, StageTasks: 8, MrpJobs: 8, KnownScaling: known, Producers: 1, Staged: 8 * 100},
+		{Name: "x_w4", Tasks: 4 + p4, PlumbingTasks: p4, StageTasks: 4, MrpJobs: 4, KnownScaling: known, Producers: 1, Staged: 4 * 100, Outputs: 4 * 100, Jobs: 4 * 100},
+		{Name: "x_w8", Tasks: 8 + p8, PlumbingTasks: p8, StageTasks: 8, MrpJobs: 8, KnownScaling: known, Producers: 1, Staged: 8 * 100, Outputs: 8 * 100, Jobs: 8 * 100},
 	}
 }
 
 // TestBenchReportGates drives bench_report.py on synthetic metrics: the
 // width-flatness gate, its known_scaling exemption (which may not get worse
 // and must be dropped once flat), the flat per-task staging gate, the flat
-// restaged-bytes-per-producer gate, the stage-tasks-equal-mrp-jobs gate, and
+// restaged-bytes-per-producer gate, the gate that declared-output bytes per
+// byte the jobs wrote do not grow with width, the stage-tasks-equal-mrp-jobs gate, and
 // the gate that every lane staged its inputs, and the gate that no plumbing
 // task moves a published file, gating and under BENCH_UPDATE=1.
 func TestBenchReportGates(t *testing.T) {
@@ -105,6 +119,10 @@ func TestBenchReportGates(t *testing.T) {
 		{"no restaged bytes passes", false, restagedPair(1, 0, 1, 0), restagedPair(1, 0, 1, 0), ""},
 		{"broadcast copied per fork fails", false, restagedPair(1, 4*65600, 1, 8*65600), restagedPair(1, 4*65600, 1, 8*65600), "RESTAGED[x]"},
 		{"restaged where none were fails", false, restagedPair(1, 0, 1, 100), restagedPair(1, 0, 1, 100), "RESTAGED[x]"},
+		{"outputs per job byte flat passes", false, outputsPair(4*1010, 4*1000, 8*1012, 8*1000), outputsPair(4*1010, 4*1000, 8*1012, 8*1000), ""},
+		{"outputs per job byte falling passes", false, outputsPair(4*1000+500, 4*1000, 8*1000+500, 8*1000), outputsPair(4*1000+500, 4*1000, 8*1000+500, 8*1000), ""},
+		{"output written once more per fork fails", false, outputsPair(4*1000, 4*1000, 8*2000, 8*1000), outputsPair(4*1000, 4*1000, 8*2000, 8*1000), "OUTPUTS[x]"},
+		{"no output bytes fails", false, outputsPair(400, 400, 0, 800), outputsPair(400, 400, 0, 800), "OUTPUTS[x]"},
 		{"update records known scaling", true, widthPair(2, 3, 255), widthPair(2, 3, 255), ""},
 		{"update refuses worse known scaling", true, widthPair(2, 4, 255), widthPair(2, 3, 255), "may not get worse"},
 		{"update refuses stage tasks off mrp", true, offMrp, offMrp, "MRP-JOBS[x_w8]"},

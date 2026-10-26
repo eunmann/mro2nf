@@ -90,8 +90,10 @@ stale task. Nor does a process read a global such as `workflow.workDir` or
 No task stages a file of PLAN's: the digests reach it as values, which
 Nextflow keys on by content.
 
-**The run's call** reaches each task by one rule (`CALL`): a call whose base64
-is at most 4 KiB (`cg.MaxValueBytes`) is a value each task's script writes
+**The run's call** reaches each task by one rule (`CALL`): PLAN writes it as
+base64 of its gzip, as a call naming thousands of entry files compresses
+to a few percent (10,000 paths: 1.67 MB of plain base64, 37 KB). A call
+whose encoding is at most 4 KiB (`cg.MaxValueBytes`) is a value each task's script writes
 into `call.b64`, as on AWS Batch a staged file costs each task a download; a
 larger one is a file the driver writes once per run
 (`collectFile`), in a directory named by the call and the run's session, which
