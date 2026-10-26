@@ -1,0 +1,35 @@
+# A directory output holding a file, a relative link to it and a link that
+# reaches nothing, which a downstream stage lists (#624). mrp hands the reader
+# the directory as its producer wrote it, so the reader lists all three and
+# reads the dangling link's target. Its outs publish no file:
+# dir_dangling_link_out publishes the directory.
+stage MKLINKS(
+    out path d,
+    src py   "stages/mklinks",
+)
+
+stage LIST(
+    in  path   d,
+    out string names,
+    out string target,
+    src py     "stages/list",
+)
+
+pipeline DL(
+    out string names,
+    out string target,
+)
+{
+    call MKLINKS()
+
+    call LIST(
+        d = MKLINKS.d,
+    )
+
+    return (
+        names  = LIST.names,
+        target = LIST.target,
+    )
+}
+
+call DL()

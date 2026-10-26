@@ -1,0 +1,21 @@
+# A pipeline whose outs publish a directory holding a link that reaches
+# nothing (#624). mrp publishes the link as the stage wrote it, and the run
+# succeeds; mro2nf fails the delivery instead (divergences.json,
+# dir-dangling-link). Exercised by TestMrpDiffFailureParity.
+stage MKLINKS(
+    out path d,
+    src py   "stages/mklinks",
+)
+
+pipeline DLO(
+    out path d,
+)
+{
+    call MKLINKS()
+
+    return (
+        d = MKLINKS.d,
+    )
+}
+
+call DLO()

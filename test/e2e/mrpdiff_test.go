@@ -351,6 +351,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "dir_out"},
 	// #242: dotfiles and an empty subdirectory inside directory outputs.
 	{name: "dir_hidden"},
+	// #624: a link that reaches nothing inside a directory output reaches its
+	// reader, from the producer's bundle and from a copy of it.
+	{name: "dir_dangling_link", cloud: true},
 	// #328: string values shaped like @mre: markers reach the stage and the
 	// published outs exactly as mrp gives them.
 	{name: "marker_strings"},
@@ -719,6 +722,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// #496: outs reaching a directory and a file inside it. mrp succeeds and
 	// leaves a dangling link; mro2nf fails the delivery.
 	{name: "dir_and_inner_file", mrp: runOutcome{}, divergence: "dir-and-inner-file"},
+	// #624: outs publishing a directory holding a link its stage wrote that
+	// reaches nothing. mrp publishes the link and succeeds; mro2nf fails the
+	// delivery.
+	{name: "dir_dangling_link_out", mrp: runOutcome{}, divergence: "dir-dangling-link"},
 	// #522: a nested map call whose inner forks are all empty. mrp panics
 	// while it makes the pipestance, before any stage runs; mro2nf fails its
 	// OUTS task.
