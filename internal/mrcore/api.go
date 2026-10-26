@@ -9,12 +9,73 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// ErrUnresolved reports a fork root whose forks the task could not count.
-var ErrUnresolved = errors.New("fork root unresolved")
+var (
+	// ErrUnresolved reports a fork root whose forks the task could not count.
+	ErrUnresolved = errors.New("fork root unresolved")
+
+	errOtherKey = errors.New("not the fork's own key")
+)
 
 // Part is the fork id part of root at index ix.
 func Part(root *syntax.CallGraphStage, ix syntax.CollectionIndex) *ForkSourcePart {
 	return &ForkSourcePart{Split: root.Split(), Id: convertForkPart(ix)}
+}
+
+// CountedPart is root's part at index ix among the n forks of root under
+// the parts before it, as core's expansion leaves it (fork.go:1657
+// expandForkFromObj, :350 expandStaticForkPart): root's split, and a range
+// of length n, which ForkId.ForkIdString reads where root's source is of
+// unknown length.
+func CountedPart(root *syntax.CallGraphStage, ix syntax.CollectionIndex, n int) *ForkSourcePart {
+	p := Part(root, ix)
+	if p.Id.Mode() == syntax.ModeMapCall {
+		p.Range = ownKeyRange{key: p.Id.MapKey(), n: n}
+	} else {
+		p.Range = arrayLengthRange(n)
+	}
+
+	return p
+}
+
+// ownKeyRange is the range of a map part of n keys of which a task knows
+// only its own: core's mapKeyRange (expandForkFromObj) lists every key of
+// the source, which the task did not stage.
+type ownKeyRange struct {
+	key string
+	n   int
+}
+
+func (r ownKeyRange) Allow(i syntax.CollectionIndex) error {
+	if i.MapKey() != r.key {
+		return fmt.Errorf("%w: %q, the fork's is %q", errOtherKey, i.MapKey(), r.key)
+	}
+
+	return nil
+}
+
+func (r ownKeyRange) Length() int { return r.n }
+
+// ForkID is the id mrp names the fork of node fqid at fork by, its fork
+// dir's and its jobs' (ForkId.ForkIdString): the id of the node's fork that
+// fork matches (Node.matchFork), whose parts carry their ranges
+// (CountedPart).
+func (t *TopNode) ForkID(fqid string, fork ForkId) (string, error) {
+	node, err := t.node(fqid)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := node.matchFork(nil, fork)
+	if err != nil {
+		return "", fmt.Errorf("fork of %s at %s: %w", fqid, fork.GoString(), err)
+	}
+
+	id, err := f.forkId.ForkIdString()
+	if err != nil {
+		return "", fmt.Errorf("fork id of %s at %s: %w", fqid, fork.GoString(), err)
+	}
+
+	return id, nil
 }
 
 // Index is the index of root's part in fork, and false where fork has none.

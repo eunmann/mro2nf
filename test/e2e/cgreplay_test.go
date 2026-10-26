@@ -308,18 +308,33 @@ func stageDeps(g *cg.Graph, st *syntax.CallGraphStage) []string {
 }
 
 // placeholders are the dirs mrp may keep its disabled placeholder of st's
-// fork with no fork of root under prefix in: the id of prefix's parts, as
-// an empty part ends a fork id (core/fork.go:1133), or, under no prefix,
-// fork0 or the node's own dir.
-func (rp *cgReplay) placeholders(st *syntax.CallGraphStage, root *syntax.CallGraphStage, prefix replayInstance) []string {
+// fork with no fork of its root after prefix in: the id of prefix's parts,
+// as an empty part ends a fork id (core/fork.go:1132), or, under no
+// prefix, fork0 or the node's own dir.
+func (rp *cgReplay) placeholders(st *syntax.CallGraphStage, prefix replayInstance) []string {
 	dir := filepath.Join(strings.Split(st.Fqid, ".")...)
 	if len(prefix.fork) == 0 {
 		return []string{dir, filepath.Join(dir, "fork0")}
 	}
 
-	empty := append(slices.Clip(prefix.fork), cg.Part{Root: root, Index: cg.ArrayIndex(0)})
+	empty, lens := slices.Clip(prefix.fork), slices.Clip(prefix.lens)
+	for _, r := range st.ForkRoots()[len(prefix.fork):] {
+		empty, lens = append(empty, cg.Part{Root: r, Index: cg.ArrayIndex(0)}), append(lens, 0)
+	}
 
-	return []string{filepath.Join(dir, empty.ID(append(slices.Clip(prefix.lens), 0)))}
+	return []string{filepath.Join(dir, rp.forkID(st.Fqid, empty, lens))}
+}
+
+// forkID is the id mrp names node's fork f of the fork counts lens by.
+func (rp *cgReplay) forkID(node string, f cg.Fork, lens []int) string {
+	rp.t.Helper()
+
+	id, err := rp.g.ForkID(node, f, lens)
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	return id
 }
 
 // instances enumerates st's instances root by root from the fork elements
@@ -345,7 +360,7 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 	}
 
 	if len(found) == 0 {
-		for _, rel := range rp.placeholders(st, roots[i], prefix) {
+		for _, rel := range rp.placeholders(st, prefix) {
 			rp.placeholderDirs[rel] = true
 		}
 	}
@@ -451,7 +466,7 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 		rp.t.Errorf("%s: mre stage chose fork %s, staged %s", st.Fqid, inst.Fork, in.fork)
 	}
 
-	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), inst.ForkID())
+	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), rp.forkID(st.Fqid, inst.Fork, inst.Lens))
 
 	if mrpOff := rp.mrpDisabledAt(st, rel); disabled != mrpOff || disabled != inst.Disabled {
 		rp.t.Errorf("%s: mre stage refused it as disabled: %t, its args resolve it disabled: %t, mrp's run disabled: %t",

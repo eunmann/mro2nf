@@ -340,6 +340,33 @@ func TestInputsNestedGather(t *testing.T) {
 	}
 }
 
+// TestForkID: a fork's id is core's ForkIdString of its counted parts: a
+// part of variable length starts a new index after '_', one of a single
+// fork folds into the index before it, and a map part writes its key.
+func TestForkID(t *testing.T) {
+	top := compile(t, nested, fakeStore{})
+	sq := stage(t, top, "TOP.INNER.SQ").ForkRoots()
+	gtop := compile(t, gather, fakeStore{})
+	sqm := stage(t, gtop, "TOP.SQM").ForkRoots()[0]
+
+	for _, tc := range []struct {
+		node string
+		top  *TopNode
+		fork ForkId
+		want string
+	}{
+		{"TOP.INNER.SQ", top, ForkId{CountedPart(sq[0], arrayIndexFork(0), 2), CountedPart(sq[1], arrayIndexFork(1), 2)}, "fork0_fork1"},
+		{"TOP.INNER.SQ", top, ForkId{CountedPart(sq[0], arrayIndexFork(1), 2), CountedPart(sq[1], arrayIndexFork(0), 1)}, "fork1"},
+		{"TOP.SQM", gtop, ForkId{CountedPart(sqm, mapKeyFork("a"), 2)}, "fork_a"},
+		{"TOP.MK", top, nil, "fork0"},
+	} {
+		got, err := tc.top.ForkID(tc.node, tc.fork)
+		if err != nil || got != tc.want {
+			t.Errorf("ForkID of %s at %s = %q, %v; want %q", tc.node, tc.fork.GoString(), got, err, tc.want)
+		}
+	}
+}
+
 const knownInner = `
 pipeline IN2(
     in  int   a,

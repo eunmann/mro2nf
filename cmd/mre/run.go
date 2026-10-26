@@ -147,7 +147,12 @@ func (f *runFlags) instance(g *cg.Graph, inst cg.Instance) (job.Instance, error)
 
 	f.rt.Version = job.Versions(g.MroPaths())
 
-	return job.Instance{Stage: stage, ForkID: inst.ForkID()}, nil
+	forkID, err := g.ForkID(inst.Node, inst.Fork, inst.Lens)
+	if err != nil {
+		return job.Instance{}, fmt.Errorf("run: %w", err)
+	}
+
+	return job.Instance{Stage: stage, ForkID: forkID}, nil
 }
 
 func (f *runFlags) split(ctx context.Context, g *cg.Graph, in job.Instance, args core.LazyArgumentMap) error {

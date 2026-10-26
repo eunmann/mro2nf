@@ -158,7 +158,12 @@ func (g *Graph) writeSourceGates(s *stagedStore, ps string) error {
 				return fmt.Errorf("gate %s: %w", id, err)
 			}
 
-			path := filepath.Join(ps, filepath.FromSlash(strings.ReplaceAll(id, ".", "/")), f.ID(lens), "_outs")
+			fid, err := g.ForkID(id, f, lens)
+			if err != nil {
+				return fmt.Errorf("gate %s: %w", id, err)
+			}
+
+			path := filepath.Join(ps, filepath.FromSlash(strings.ReplaceAll(id, ".", "/")), fid, "_outs")
 			if err := writeJSONFile(path, outs); err != nil {
 				return err
 			}
