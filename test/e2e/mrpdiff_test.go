@@ -642,6 +642,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #601: a merge's fork count read from a stage inside the merged
 	// pipeline's own fork.
 	{name: "map_chain_counted"},
+	// A map call over a literal whose second row is a stage output, each
+	// row's forks staging only what their element reads.
+	{name: "map_literal_row_stage_ref"},
 	// #621: a literal Martian expands from an entry collection, read alike
 	// at every width.
 	{name: "witness_merged_literal"},

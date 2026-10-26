@@ -51,9 +51,12 @@ func (p *readPatterns) ref(ref *syntax.RefExp, ctx []splitCtx) {
 	}
 }
 
-// aligner is up's, nil where up is no stage or forked on no root the
-// reader is not, so that the reader reads every instance of it under the
-// roots they share.
+// aligner is up's, nil where up is no stage, so that the reader reads
+// every instance of it under the roots they share. One of a node forked on
+// no root the reader is not aligns nothing, and limits a read to the
+// elements that reference the node all the same: Martian specializes a
+// binding to each fork's element of a literal (syntax SplitExp.BindingPath),
+// so a fork whose element names no node reads none of it.
 func (p *readPatterns) aligner(up string) *aligner {
 	u, err := p.g.Stage(up)
 	if err != nil {
@@ -66,10 +69,6 @@ func (p *readPatterns) aligner(up string) *aligner {
 		if !slices.ContainsFunc(p.reader, func(x *syntax.CallGraphStage) bool { return x.Fqid == r.Fqid }) {
 			a.roots = append(a.roots, r)
 		}
-	}
-
-	if len(a.roots) == 0 {
-		return nil
 	}
 
 	return a
