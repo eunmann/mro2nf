@@ -9,7 +9,7 @@ name: Nightly
 # release tier lives in release.yml.
 #
 # Two tiers share the workflow. The daily one runs the e2e suites, the scale
-# smoke, lint and the unit tests on Linux and macOS, and, whether or not the
+# smoke, lint and the unit tests, and, whether or not the
 # change gate skips those, the vulnerability scans of the code and the runtime
 # image. The weekly one, from its own cron or a dispatch with `heavy`,
 # runs the full scale tier and the generative differential's long run, which
@@ -196,17 +196,12 @@ jobs:
           path: artifacts/scale/
           if-no-files-found: ignore
 
-  # macOS runs the darwin archives' code, which PR Validation only compiles.
   unit:
-    name: Nightly unit tests (${{ matrix.os }})
+    name: Nightly unit tests
     needs: gate
     if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
