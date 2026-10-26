@@ -11,7 +11,7 @@ Every turn re-reads your whole context, so cost grows with what you load. Locate
 
 ## 1. Orient
 
-Read the pages of `docs/architecture/` and the rows of `docs/reference/feature-coverage.md` that cover the task, not all of them (`docs/README.md` indexes every page). The package map, for orientation:
+Read the sections of `docs/design.md` and the rows of `docs/feature-coverage.md` that cover the task, not all of them. The package map, for orientation:
 
 - **Call graph:** `internal/cg` — Martian's compiled call graph: the witness, topology, plan, the `_args` resolver, fork elements, gates, pipeline outs
 - **Emitter:** `internal/cgnf` — the call graph to a Nextflow project: `main.nf` wiring, `assets/stage.nf`, `nextflow.config`
@@ -26,7 +26,7 @@ Read the pages of `docs/architecture/` and the rows of `docs/reference/feature-c
 
 Grep for the symbols, flags, record names, sidecar names and generated Nextflow constructs the task touches, and list each affected layer with one line on why. A change usually crosses a seam — `internal/cgnf` ↔ `mre` (flags, bundle shapes), `internal/cg` records ↔ the driver's Groovy helpers in `assets/stage.nf` (ordering, JSON), `internal/cg` ↔ `internal/job` — so find both sides.
 
-Check, without reading them in full, whether the change needs: a new or re-recorded golden (record it from real `mrp`), a fixture in the e2e tables (`TestEveryFixtureIsExercised` enforces registration), a bench re-baseline (`BENCH_UPDATE=1 make bench` when task counts change), a target-specific path (awsbatch, healthomics), or a docs update (`docs/reference/feature-coverage.md`, the `docs/architecture/` page of the mechanism, the `docs/user-guide/` page of a user-visible behavior).
+Check, without reading them in full, whether the change needs: a new or re-recorded golden (record it from real `mrp`), a fixture in the e2e tables (`TestEveryFixtureIsExercised` enforces registration), a bench re-baseline (`BENCH_UPDATE=1 make bench` when task counts change), a target-specific path (awsbatch, healthomics), or a docs update (`docs/feature-coverage.md`, the `docs/design.md` section of the mechanism, the `docs/usage.md` section of a user-visible behavior).
 
 ## 3. Read
 

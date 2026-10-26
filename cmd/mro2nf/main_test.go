@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,61 @@ func TestRunRefusesBadInvocations(t *testing.T) {
 	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a refused transpile left %s (stat: %v)", out, err)
 	}
+}
+
+// TestHelpSucceeds checks -h and -help print the synopsis and the flags to
+// stderr and succeed, so mro2nf exits 0, transpiling nothing.
+func TestHelpSucceeds(t *testing.T) {
+	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
+
+	for _, help := range []string{"-h", "-help", "--help"} {
+		out := filepath.Join(t.TempDir(), "proj")
+
+		var err error
+
+		usage := captureStderr(t, func() { err = run([]string{help, "-o", out, mro}) })
+		if err != nil {
+			t.Errorf("run(%s) = %v, want nil", help, err)
+		}
+
+		for _, want := range []string{errUsage.Error(), "-mropath"} {
+			if !strings.Contains(usage, want) {
+				t.Errorf("%s printed no %q:\n%s", help, want, usage)
+			}
+		}
+
+		if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s transpiled into %s (stat: %v)", help, out, err)
+		}
+	}
+}
+
+// captureStderr returns what fn writes to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := os.Stderr
+	os.Stderr = w
+
+	fn()
+
+	os.Stderr = stderr
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(got)
 }
 
 // TestRunReadsNoConfigFile checks a .mro2nf.yml beside the .mro sets

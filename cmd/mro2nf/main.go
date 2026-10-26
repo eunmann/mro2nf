@@ -28,9 +28,17 @@ func main() {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("mro2nf", flag.ContinueOnError)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(fs.Output(), errUsage)
+		fs.PrintDefaults()
+	}
 	f := defineTranspileFlags(fs)
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+
 		return fmt.Errorf("parse flags: %w", err)
 	}
 

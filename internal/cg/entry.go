@@ -298,7 +298,7 @@ func VetEntryLeaf(l EntryLeaf, hostPaths, remote bool) error {
 				shown = fmt.Sprintf("U+%04X", c)
 			}
 
-			return fmt.Errorf("%w: entry input '%s': the path contains %s, which Nextflow's task stage-in script leaves unquoted, so bash would expand it and could stage another file; rename the file (a Nextflow staging limitation, see docs/user-guide/files-and-paths.md)",
+			return fmt.Errorf("%w: entry input '%s': the path contains %s, which Nextflow's task stage-in script leaves unquoted, so bash would expand it and could stage another file; rename the file (a Nextflow staging limitation, see mro2nf's docs/usage.md#file-names-nextflow-cannot-stage)",
 				ErrEntryFile, l.Input, shown)
 		}
 	}

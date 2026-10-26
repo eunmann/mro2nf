@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	divergencesDoc  = "../../docs/reference/divergences.md"
-	featureCoverage = "../../docs/reference/feature-coverage.md"
+	divergencesDoc  = "../../docs/divergences.md"
+	featureCoverage = "../../docs/feature-coverage.md"
 )
 
 // TestDivergencesDocIsCurrent fails when the checked-in divergence table of
-// docs/reference/divergences.md is not what the allowlist renders.
+// docs/divergences.md is not what the allowlist renders.
 func TestDivergencesDocIsCurrent(t *testing.T) {
 	allow, err := Load(checkedIn)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestDivergencesDocIsCurrent(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(want, string(doc)); diff != "" {
-		t.Errorf("docs/reference/divergences.md's divergence table is stale; run make docs-divergences (-want +got):\n%s", diff)
+		t.Errorf("docs/divergences.md's divergence table is stale; run make docs-divergences (-want +got):\n%s", diff)
 	}
 }
 

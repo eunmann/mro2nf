@@ -16,7 +16,7 @@ DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.52.0
 GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check vulncheck deadcode docs-divergences notices cloc install clean help
+.PHONY: build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale test-cellranger vet lint lint-check vulncheck deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -148,7 +148,7 @@ deadcode: ## Fail on functions unreachable from the mro2nf/mre binaries
 	if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable functions found"; exit 1; fi
 
 # make test fails while the checked-in table is stale (TestDivergencesDocIsCurrent).
-docs-divergences: ## Regenerate docs/reference/divergences.md's table from test/e2e/divergences.json
+docs-divergences: ## Regenerate docs/divergences.md's table from test/e2e/divergences.json
 	go run ./test/divergence/gendoc
 
 # make test fails while THIRD_PARTY_NOTICES is stale (TestNoticesAreCurrent).

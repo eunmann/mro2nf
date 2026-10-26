@@ -234,6 +234,46 @@ func TestLocalPoolWithoutLimitsFails(t *testing.T) {
 	}
 }
 
+// TestGridProfilesResolve: each grid profile a project advertises parses
+// under `nextflow config`, selects its scheduler, reads head-node inputs in
+// place, and grants jobs as mrp's cluster job managers do, with no local
+// pool to grant from or clamp a task to. No CI runner has a scheduler, so
+// this is the check the grid targets get.
+func TestGridProfilesResolve(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	proj := transpile(t, "split_test")
+
+	for _, profile := range []string{"slurm", "sge", "lsf", "pbs"} {
+		cmd := exec.Command("nextflow", "config", "-flat", "-profile", profile)
+		cmd.Dir = proj
+		cmd.Env = append(os.Environ(), "NXF_ANSI_LOG=false", "NXF_OFFLINE=true")
+
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("nextflow config -profile %s: %v\n%s", profile, err, out)
+
+			continue
+		}
+
+		for _, want := range []string{
+			"process.executor = '" + profile + "'",
+			"params.mro2nf_host_in_place = true",
+			"params.mro2nf_local_jobs = false",
+		} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("profile %s lacks %q:\n%s", profile, want, out)
+			}
+		}
+
+		if strings.Contains(string(out), "process.resourceLimits") {
+			t.Errorf("profile %s sets a local pool:\n%s", profile, out)
+		}
+	}
+}
+
 // writeOverlay writes body as a config in proj and returns its path.
 func writeOverlay(t *testing.T, proj, body string) string {
 	t.Helper()

@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -51,9 +52,14 @@ func run(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	if args[0] == "version" {
+	switch args[0] {
+	case "version":
 		// Writing the version line to stdout cannot meaningfully fail.
 		_, _ = fmt.Fprintln(os.Stdout, "mre", buildinfo.Version(version))
+
+		return nil
+	case "-h", "-help", "--help":
+		_, _ = fmt.Fprintln(os.Stderr, errUsage)
 
 		return nil
 	}
@@ -63,7 +69,11 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("%w: %q", errUnknownCommand, args[0])
 	}
 
-	return cmd(ctx, args[1:])
+	if err := cmd(ctx, args[1:]); !errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+
+	return nil
 }
 
 func subcommands() map[string]func(context.Context, []string) error {

@@ -48,7 +48,7 @@ const packageScript = `#!/usr/bin/env bash
 # HealthOmics applies the standard profile to a run that names none:
 #   ./package.sh <image>
 # Push the image every task runs in (mro2nf's
-# docs/user-guide/container-images.md) to private ECR in the run's region
+# docs/usage.md, "Container images") to private ECR in the run's region
 # and name it by digest (<repo>@sha256:...): the workflow pins it, so every
 # run executes the code it was validated with, and a run cannot name
 # another. Then register it:
@@ -79,6 +79,15 @@ params.mro2nf_image = '$1'
 includeConfig 'conf/healthomics.config'
 EOF
 rm -f workflow.zip
-(cd "$pkg" && zip -qr - .) > workflow.zip
+zipfile="$PWD/workflow.zip"
+# Fixed modes, times and entry order, and no extra fields (-X), so a project
+# packages to the same bytes on every run and host.
+(
+    cd "$pkg"
+    export TZ=UTC
+    chmod -R u=rwX,go=rX .
+    find . -exec touch -h -d '2000-01-01 00:00:00' {} +
+    find . -mindepth 1 | LC_ALL=C sort | zip -qX "$zipfile" -@
+)
 echo "wrote workflow.zip"
 `
