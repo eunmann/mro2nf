@@ -89,10 +89,14 @@ and `THIRD_PARTY_NOTICES`.
 
 The archives are reproducible: entries sorted by name, owned and writable only
 by root, with the released commit's time, and gzip without a name or timestamp
-(`test/e2e/workflow_release_test.go` runs the packaging step). In a public
-repository the archives and the image carry build provenance; check a download
-with `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify
-<file> --repo eunmann/mro2nf`.
+(`test/e2e/workflow_release_test.go` runs the packaging step). Check a download
+with `sha256sum -c SHA256SUMS --ignore-missing`. Releases after v0.6.0 also
+carry build provenance for the archives and the image: check it with `gh
+attestation verify <file> --repo eunmann/mro2nf`, or `gh attestation verify
+oci://ghcr.io/eunmann/mro2nf-runtime:<version> --repo eunmann/mro2nf` for the
+image. v0.6.0 and the releases before it have none (v0.6.0 was cut while the
+repository was private, where GitHub offers no attestations), so `gh
+attestation verify` finds nothing for them; `SHA256SUMS` is their only check.
 
 ### Dry runs
 
