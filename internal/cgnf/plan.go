@@ -61,8 +61,8 @@ const planProcess = `process PLAN {
 `
 
 // values is the workflow expression of the run's entry values as JSON:
-// each entry input's param the launch set, a null included, and none left
-// at unsetInput, which keeps the transpiled value.
+// each entry input's param, the call's value where the launch leaves it
+// unset.
 func (p *project) values() string {
 	entries := make([]string, len(p.inputs))
 	for i, lp := range p.inputs {
@@ -73,7 +73,7 @@ func (p *project) values() string {
 		return "'{}'"
 	}
 
-	return "groovy.json.JsonOutput.toJson([" + strings.Join(entries, ", ") + "].findAll { e -> e.value != " + gstr(unsetInput) + " })"
+	return "groovy.json.JsonOutput.toJson([" + strings.Join(entries, ", ") + "])"
 }
 
 // publications maps each node the pipeline outs read to the source of the

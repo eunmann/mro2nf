@@ -6,7 +6,9 @@ A run takes two kinds of parameter: the pipeline's own inputs, and the
 ## Pipeline inputs
 
 Each input of the entry pipeline is a parameter of the same name. When it is
-unset, the run uses the value in the `.mro`'s `call`.
+unset, the run uses the value in the `.mro`'s `call`, which `main.nf`'s
+`params` block declares as its default. Any value a launch gives replaces it:
+`null` and every string included.
 
 The run's first task, PLAN, compiles the call with the launch values. So a
 launch value changes forks, disabled calls and chunk counts exactly as the

@@ -14,9 +14,9 @@ import (
 )
 
 // launchParam is one param a run is launched with: main.nf's params block
-// declares it, conf/base.config sets its value, nextflow_schema.json
-// describes it, and parameter-template.json lists it where a HealthOmics run
-// may set it.
+// declares it, conf/base.config sets the value of each of the project's own,
+// nextflow_schema.json describes it, and parameter-template.json lists it
+// where a HealthOmics run may set it.
 type launchParam struct {
 	id     string
 	schema *types.Schema
@@ -24,9 +24,14 @@ type launchParam struct {
 	// Nextflow converts a launch value to or refuses it at launch; empty for
 	// none, a value mre plan types.
 	nfType string
-	// value is the param's value in conf/base.config: nil, a string, a bool
-	// or a map of strings.
+	// value is the param's value when the launch leaves it unset, nil for
+	// none: conf/base.config sets a project param's, a string, a bool or a
+	// map of strings; the params block gives an entry input's, the call's
+	// value as types.DecodeJSON decodes it, as its default.
 	value any
+	// nullable marks a param a launch may set to null: an entry input, whose
+	// null is the null literal mrp's invocation takes.
+	nullable bool
 	// def is the JSON value a run takes when the param is unset, nil for none.
 	def json.RawMessage
 	// group is the id of the param's schema group (schemaGroups), empty for
@@ -54,13 +59,6 @@ const mro2nfGroup = "mro2nf_options"
 
 // null is the null literal of Groovy and of JSON.
 const null = "null"
-
-// unsetInput is the value conf/base.config gives each entry input. Nextflow
-// passes a -params-file null through over a config value, so a null and an
-// unset input reach the driver apart: PLAN's values leave out an input at
-// this value, which keeps the transpiled value, and carry a null, which
-// sets the input to null, as a null literal in mrp's invocation does.
-const unsetInput = "mro2nf:transpiled"
 
 func schemaGroups() []paramGroup {
 	return []paramGroup{
@@ -204,9 +202,8 @@ func profileSet(p launchParam) launchParam {
 	return p
 }
 
-// entryInputs are the entry inputs as run params: each unsetInput in
-// conf/base.config, keeping the value of the .mro's call, which the schema
-// gives as its default.
+// entryInputs are the entry inputs as run params, each with the value of
+// the .mro's call as its default in main.nf's params block and the schema.
 func (p *project) entryInputs() ([]launchParam, error) {
 	params, tbl, err := p.src.InParams(p.src.Invocation.Call, p.opts.MroPaths)
 	if err != nil {
@@ -245,7 +242,7 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 	}
 
 	lp := launchParam{
-		id: m.Id, schema: s, nfType: entryType(t), desc: cmp.Or(m.Help, fmt.Sprintf("input %s of pipeline %s", m.Id, p.src.Invocation.Call)),
+		id: m.Id, schema: s, nfType: entryType(t), nullable: true, desc: cmp.Or(m.Help, fmt.Sprintf("input %s of pipeline %s", m.Id, p.src.Invocation.Call)),
 		omics: fmt.Sprintf("pipeline input %q; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory", m.Id),
 	}
 
@@ -266,6 +263,12 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 
 	lp.def = def
 
+	if def != nil {
+		if lp.value, err = types.DecodeJSON(def); err != nil {
+			return launchParam{}, fmt.Errorf("value: %w", err)
+		}
+	}
+
 	return lp, nil
 }
 
@@ -284,19 +287,23 @@ func entryType(t syntax.Type) string {
 	return ""
 }
 
-// declaration is lp's entry in main.nf's params block: its type with its
-// value as the default, or nullable where it has none, which keeps the
-// value conf/base.config sets; an untyped param is an Object?, which takes
-// any value.
+// declaration is lp's entry in main.nf's params block: its type, an
+// untyped param's Object, which takes any value, nullable where a launch
+// may set it to null or it has no value, and its value as the default.
+// Nextflow takes the default only for a param no launch, params file or
+// config sets, and a params file's null over it, so an unset entry input
+// keeps the call's value and a null one is null.
 func (lp launchParam) declaration() string {
-	switch {
-	case lp.nfType == "":
-		return lp.id + ": Object?"
-	case lp.value == nil:
-		return lp.id + ": " + lp.nfType + "?"
-	default:
-		return lp.id + ": " + lp.nfType + " = " + groovy(lp.value)
+	decl := lp.id + ": " + cmp.Or(lp.nfType, "Object")
+	if lp.nullable || lp.value == nil {
+		decl += "?"
 	}
+
+	if lp.value == nil {
+		return decl
+	}
+
+	return decl + " = " + groovy(lp.value)
 }
 
 // paramsBlock is main.nf's params block, which declares every launch
@@ -305,9 +312,10 @@ func (lp launchParam) declaration() string {
 func (p *project) paramsBlock() string {
 	var b strings.Builder
 
-	b.WriteString(`// Every launch param: a launch setting another fails. conf/base.config and
-// the profiles set their values; PLAN types each untyped entry input as its
-// .mro declares it.
+	b.WriteString(`// Every launch param: a launch setting another fails. An entry input
+// defaults to the .mro call's value; conf/base.config and the profiles set
+// the project's own. PLAN types each untyped entry input as its .mro
+// declares it.
 params {
 `)
 
@@ -355,25 +363,55 @@ func (p *project) launchParams() []launchParam {
 	return out
 }
 
-// groovy is v as a Groovy literal.
+// groovy is v, a value types.DecodeJSON decodes or a map of strings, as a
+// Groovy literal, which groovy.json.JsonOutput encodes back to JSON that
+// Martian parses to the same literal. A number with a fraction or an
+// exponent is a Double: Groovy's default BigDecimal would encode
+// 1.234567e+06 as 1234567, Martian's int literal, which an untyped map
+// keeps as an int.
 func groovy(v any) string {
 	switch x := v.(type) {
 	case string:
 		return gstr(x)
 	case bool:
 		return strconv.FormatBool(x)
-	case map[string]string:
-		if len(x) == 0 {
-			return "[:]"
+	case json.Number:
+		if strings.ContainsAny(string(x), ".eE") {
+			return string(x) + "d"
 		}
 
+		return string(x)
+	case []any:
+		items := make([]string, len(x))
+		for i, e := range x {
+			items[i] = groovy(e)
+		}
+
+		return "[" + strings.Join(items, ", ") + "]"
+	case types.Object:
+		entries := make([]string, len(x))
+		for i, m := range x {
+			entries[i] = gstr(m.Key) + ": " + groovy(m.Value)
+		}
+
+		return gmap(entries)
+	case map[string]string:
 		entries := make([]string, 0, len(x))
 		for _, k := range slices.Sorted(maps.Keys(x)) {
 			entries = append(entries, gstr(k)+": "+gstr(x[k]))
 		}
 
-		return "[" + strings.Join(entries, ", ") + "]"
+		return gmap(entries)
 	default:
 		return null
 	}
+}
+
+// gmap is the Groovy map literal of entries, each `key: value`.
+func gmap(entries []string) string {
+	if len(entries) == 0 {
+		return "[:]"
+	}
+
+	return "[" + strings.Join(entries, ", ") + "]"
 }

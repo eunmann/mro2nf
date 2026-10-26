@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -108,8 +109,8 @@ func emitSource(t *testing.T, src string) map[string]string {
 // TestEmitParamsSchema: nextflow_schema.json declares each entry input at
 // its root by its Martian type, described by its help text, with the
 // call's value as its default unless that is null, and the project's own
-// params in their groups; it declares exactly the params conf/base.config
-// sets.
+// params in their groups; it declares exactly the params main.nf's params
+// block declares.
 func TestEmitParamsSchema(t *testing.T) {
 	tree := emitSource(t, typedEntrySrc)
 
@@ -163,58 +164,112 @@ func TestEmitParamsSchema(t *testing.T) {
 		}
 	}
 
-	set := regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["conf/base.config"], -1)
-
-	config := make([]string, len(set))
-	for i, m := range set {
-		config[i] = m[1]
-	}
-
-	if d := cmp.Diff(slices.Sorted(slices.Values(config)), slices.Sorted(slices.Values(declared))); d != "" {
-		t.Errorf("schema params differ from conf/base.config's (-config +schema):\n%s", d)
+	if d := cmp.Diff(slices.Sorted(maps.Keys(blockParams(tree))), slices.Sorted(slices.Values(declared))); d != "" {
+		t.Errorf("schema params differ from the params block's (-block +schema):\n%s", d)
 	}
 }
 
-// TestEmitTellsANullFromAnUnsetInput (#625): conf/base.config gives each
-// entry input a value no launch spells, which PLAN's values leave out, so
-// the input keeps the transpiled value, while a -params-file null, which
-// Nextflow passes through over it, reaches PLAN as null, which sets the
-// input to null, as a null in mrp's invocation does.
-func TestEmitTellsANullFromAnUnsetInput(t *testing.T) {
-	tree := emitSource(t, typedEntrySrc)
+// blockParams maps each param main.nf's params block declares to its
+// declaration.
+func blockParams(tree map[string]string) map[string]string {
+	_, block, _ := strings.Cut(tree["main.nf"], "\nparams {\n")
+	block, _, _ = strings.Cut(block, "\n}\n")
 
-	if want := "params.n = 'mro2nf:transpiled'\n"; !strings.Contains(tree["conf/base.config"], want) {
-		t.Errorf("conf/base.config lacks %q:\n%s", want, tree["conf/base.config"])
+	out := map[string]string{}
+
+	for l := range strings.SplitSeq(block, "\n") {
+		id, decl, _ := strings.Cut(strings.TrimSpace(l), ": ")
+		out[id] = decl
 	}
 
-	if want := "].findAll { e -> e.value != 'mro2nf:transpiled' })"; !strings.Contains(tree["main.nf"], want) {
+	return out
+}
+
+// configParams are the params conf/base.config sets.
+func configParams(tree map[string]string) []string {
+	set := regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["conf/base.config"], -1)
+
+	out := make([]string, len(set))
+	for i, m := range set {
+		out[i] = m[1]
+	}
+
+	return out
+}
+
+// TestEmitPassesEveryEntryValue (#625): PLAN's values carry every entry
+// input's param, which holds the call's value unless the launch sets it, a
+// params file's null included, and conf/base.config sets none, whose value
+// Nextflow would take over the default but not under a params file's null.
+// A string input takes any text: no value stands for an unset input.
+func TestEmitPassesEveryEntryValue(t *testing.T) {
+	tree := emitSource(t, typedEntrySrc)
+
+	want := "PLAN(groovy.json.JsonOutput.toJson(['b': params.b, 'cfg': params.cfg, 'd': params.d, 'f': params.f, 'm': params.m, 'n': params.n, 'r': params.r, 's': params.s, 'tm': params.tm, 'xs': params.xs]), "
+	if !strings.Contains(tree["main.nf"], want) {
 		t.Errorf("main.nf lacks %q:\n%s", want, tree["main.nf"])
+	}
+
+	for _, id := range configParams(tree) {
+		if !strings.HasPrefix(id, "mro2nf_") && id != "job_resources" {
+			t.Errorf("conf/base.config sets the entry input %s:\n%s", id, tree["conf/base.config"])
+		}
+	}
+}
+
+// TestGroovyLiterals: a call value is the Groovy literal JsonOutput encodes
+// back to JSON Martian parses as the same literal: a whole number keeps its
+// text, any other number is a Double, and a string escapes every control
+// character, which a single-quoted literal cannot hold raw.
+func TestGroovyLiterals(t *testing.T) {
+	for _, tc := range []struct{ json, want string }{
+		{`null`, `null`},
+		{`true`, `true`},
+		{`-9223372036854775808`, `-9223372036854775808`},
+		{`1500`, `1500`},
+		{`-0`, `-0`},
+		{`0.5`, `0.5d`},
+		{`1e+06`, `1e+06d`},
+		{`1.234567e-07`, `1.234567e-07d`},
+		{`"it's a\\b"`, `'it\'s a\\b'`},
+		{`"a\tb\nc\r\b\f\u0001é"`, `'a\tb\nc\r\b\f\u0001é'`},
+		{`[]`, `[]`},
+		{`{}`, `[:]`},
+		{`{"z": [1, {"split": null}], "a": "x"}`, `['z': [1, ['split': null]], 'a': 'x']`},
+	} {
+		v, err := types.DecodeJSON([]byte(tc.json))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := groovy(v); got != tc.want {
+			t.Errorf("groovy(%s) = %s, want %s", tc.json, got, tc.want)
+		}
+	}
+
+	if got, want := groovy(map[string]string{"b": "y", "a": "x"}), `['a': 'x', 'b': 'y']`; got != want {
+		t.Errorf("groovy of a map of strings = %s, want %s", got, want)
 	}
 }
 
 // TestEmitDeclaresEveryLaunchParam (#357): main.nf's params block declares
-// exactly the params conf/base.config sets, so Nextflow fails a launch
-// setting another; it types a string entry input as a String, every other
-// entry input as none, an int's included, as Nextflow's Integer refuses a
-// whole-number float Martian takes as an int, and each project param
-// by its kind with its conf/base.config value as the default, so a boolean
-// is a Boolean wherever a script reads it.
+// every entry input and the params conf/base.config sets, so Nextflow fails
+// a launch setting another; it types a string entry input as a String,
+// every other entry input as none, an int's included, as Nextflow's Integer
+// refuses a whole-number float Martian takes as an int, each nullable with
+// the call's value as its default, and each project param by its kind with
+// its conf/base.config value as the default, so a boolean is a Boolean
+// wherever a script reads it.
 func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
 	tree := emitSource(t, typedEntrySrc)
+	got := blockParams(tree)
 
-	_, block, _ := strings.Cut(tree["main.nf"], "\nparams {\n")
-	block, _, _ = strings.Cut(block, "\n}\n")
-
-	got := map[string]string{}
-
-	for l := range strings.SplitSeq(block, "\n") {
-		id, decl, _ := strings.Cut(strings.TrimSpace(l), ": ")
-		got[id] = decl
-	}
-
-	want := map[string]string{
+	inputs := map[string]string{
 		"s": "String?",
-		"n": "Object?", "f": "Object?", "b": "Object?", "r": "Object?", "d": "Object?", "xs": "Object?", "m": "Object?", "tm": "Object?", "cfg": "Object?",
+		"n": "Object? = 1", "f": "Object? = 0.5d", "b": "Object? = true", "r": "Object? = '/data/r.txt'", "d": "Object? = '/data'",
+		"xs": "Object? = [1, 2]", "m": "Object? = ['k': 1]", "tm": "Object? = ['a': '/data/a.txt']", "cfg": "Object? = ['n': 3, 'ref': '/data/ref.txt']",
+	}
+	want := map[string]string{
 		"job_resources": "Map = [:]", "mro2nf_mre": "String = 'mre'", "mro2nf_mrjob": "String?", "mro2nf_adapters": "String?", "mro2nf_psid": "String = 'P'",
 		"mro2nf_monitor": "Boolean = false", "mro2nf_confine": "Boolean = false",
 		"mro2nf_host_inputs": "Boolean = true", "mro2nf_allow_remote_inputs": "Boolean = false", "mro2nf_host_in_place": "Boolean = true",
@@ -222,19 +277,14 @@ func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
 		"mro2nf_overrides": "String?",
 	}
 
+	if d := cmp.Diff(slices.Sorted(slices.Values(configParams(tree))), slices.Sorted(maps.Keys(want))); d != "" {
+		t.Errorf("the project's params differ from conf/base.config's (-config +want):\n%s", d)
+	}
+
+	maps.Copy(want, inputs)
+
 	if d := cmp.Diff(want, got); d != "" {
 		t.Errorf("params block (-want +got):\n%s", d)
-	}
-
-	set := regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["conf/base.config"], -1)
-
-	config := make([]string, len(set))
-	for i, m := range set {
-		config[i] = m[1]
-	}
-
-	if d := cmp.Diff(slices.Sorted(slices.Values(config)), slices.Sorted(maps.Keys(got))); d != "" {
-		t.Errorf("params block differs from conf/base.config's params (-config +block):\n%s", d)
 	}
 
 	if strings.Contains(stageModule, "def on(") || strings.Contains(tree["main.nf"], "on(params.") {
@@ -352,7 +402,7 @@ map call DOUBLER(
 // declared in Martian's invocation form of a split, {"split": v}, v an
 // array or a map of the input's type, with the .mro's split value so
 // wrapped as its default, the HealthOmics template names that form, and the
-// params block leaves it untyped.
+// params block leaves it untyped with that default.
 // The schema admits the form and refuses a bare value or elements of
 // another type.
 func TestSplitInputSchema(t *testing.T) {
@@ -362,10 +412,14 @@ func TestSplitInputSchema(t *testing.T) {
 		map[string]any{"type": "object", "additionalProperties": integer},
 	}}
 
-	for literal, def := range map[string]any{
-		"[1, 2]":           []any{1.0, 2.0},
-		`{"b": 2, "a": 1}`: map[string]any{"a": 1.0, "b": 2.0},
+	for literal, tc := range map[string]struct {
+		def  any
+		decl string
+	}{
+		"[1, 2]":           {[]any{1.0, 2.0}, "['split': [1, 2]]"},
+		`{"b": 2, "a": 1}`: {map[string]any{"a": 1.0, "b": 2.0}, "['split': ['a': 1, 'b': 2]]"},
 	} {
+		def := tc.def
 		tree := emitSource(t, splitEntrySrc(literal))
 
 		var doc struct {
@@ -388,7 +442,7 @@ func TestSplitInputSchema(t *testing.T) {
 			t.Errorf("split %s: parameter template lacks %s:\n%s", literal, want, tree["parameter-template.json"])
 		}
 
-		if !strings.Contains(tree["main.nf"], "\n    x: Object?\n") {
+		if !strings.Contains(tree["main.nf"], "\n    x: Object? = "+tc.decl+"\n") {
 			t.Errorf("split %s: the params block types the split int x, whose value is {\"split\": v}:\n%s", literal, tree["main.nf"])
 		}
 

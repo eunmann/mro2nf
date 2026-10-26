@@ -20,8 +20,9 @@ includeConfig 'conf/base.config'
 ` + profilesConfig
 
 // baseConfig renders conf/base.config, the settings every target shares:
-// the tools, code and knobs the stage module reads, one param per entry
-// input, the retry policy and the trace.
+// the tools, code and knobs the stage module reads, the retry policy and
+// the trace. main.nf's params block gives the entry inputs their defaults: a
+// config value would override a -params-file null.
 func (p *project) baseConfig() string {
 	var b strings.Builder
 
@@ -37,12 +38,6 @@ func (p *project) baseConfig() string {
 		}
 
 		b.WriteString("\n")
-	}
-
-	b.WriteString("// The entry inputs: left at this value, an input keeps the transpiled\n// invocation's value; a -params-file null sets it to null.\n")
-
-	for _, lp := range p.inputs {
-		fmt.Fprintf(&b, "params.%s = %s\n", lp.id, gstr(unsetInput))
 	}
 
 	b.WriteString(processConfig())

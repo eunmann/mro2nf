@@ -45,7 +45,7 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 	}
 
 	cfg := readConfig(t, out)
-	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.mro2nf_s3_mount = null", "params.x = 'mro2nf:transpiled'"} {
+	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.mro2nf_s3_mount = null"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("conf/base.config lacks %q:\n%s", want, cfg)
 		}
@@ -53,6 +53,15 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(out, "stage.nf")); err != nil {
 		t.Errorf("no stage module: %v", err)
+	}
+
+	mainNF, err := os.ReadFile(filepath.Join(out, "main.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "\n    x: Object? = 42\n"; !strings.Contains(string(mainNF), want) {
+		t.Errorf("main.nf does not declare the entry input x with the call's value, %q:\n%s", want, mainNF)
 	}
 }
 

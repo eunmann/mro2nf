@@ -837,6 +837,17 @@ func TestMrpDiffNullOverride(t *testing.T) {
 	runMrpDiffOverride(t, martianBin(t), "cli_typed", "override_null.mro", "params.json", `{"n": null, "b": null}`)
 }
 
+// TestMrpDiffStringOverride (#625): a string input takes any launch text,
+// as mrp's invocation takes any string literal: literals_edge's esc set to
+// mro2nf:transpiled reaches the stage as that text.
+func TestMrpDiffStringOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	runMrpDiffOverride(t, martianBin(t), "literals_edge", "override_string.mro", "params.json", `{"esc": "mro2nf:transpiled"}`)
+}
+
 // runMrpDiffOverride runs fixture under Nextflow with the launch values
 // params in the params file named file, and the invocation mro, whose
 // literals are those values, under mrp, and diffs the two.

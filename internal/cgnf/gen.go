@@ -140,9 +140,40 @@ func alias(i int, fqid string) string {
 	return "N" + strconv.Itoa(i) + "_" + fqid[strings.LastIndex(fqid, ".")+1:]
 }
 
-// gstr is s as a Groovy single-quoted string literal.
+// gstr is s as a Groovy single-quoted string literal, which cannot hold a
+// line break, so every control character is escaped.
 func gstr(s string) string {
-	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s) + "'"
+	var b strings.Builder
+
+	b.WriteByte('\'')
+
+	for _, c := range []byte(s) {
+		switch c {
+		case '\\', '\'':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if c < ' ' {
+				fmt.Fprintf(&b, `\u%04x`, c)
+			} else {
+				b.WriteByte(c)
+			}
+		}
+	}
+
+	b.WriteByte('\'')
+
+	return b.String()
 }
 
 func glist(ss []string) string {

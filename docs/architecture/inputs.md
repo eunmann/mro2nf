@@ -17,13 +17,25 @@ flowchart LR
 ```
 
 - **Parameters.** Every entry input is a nullable Nextflow parameter,
-  `params.<name>`, which `conf/base.config` sets to `'mro2nf:transpiled'`, a
-  value no launch spells. Nextflow passes a `-params-file` null through over
-  it, so PLAN hands `mre plan` one JSON object of the inputs the launch set, a
-  null included, which sets the input to null as a null literal in `mrp`'s
-  invocation does; an input it leaves out keeps the transpiled value. `mre
-  plan` overlays them on the invocation data and recompiles the call. So a launch value can change the run's forks, gates and
-  pruned calls as an invocation literal would under `mrp`.
+  `params.<name>`, which `main.nf`'s `params` block declares with the call's
+  value as its default. Nextflow takes a param's default only where no launch,
+  params file or config sets it, and a `-params-file` null over it
+  (`ParamsDsl.apply`), so an unset input holds the call's value and a null
+  one null. PLAN hands `mre plan` every input's value as one JSON object, and
+  `mre plan` overlays them on the invocation data and recompiles the call: a
+  null sets the input to null, as a null literal in `mrp`'s invocation does,
+  and the call's own value leaves the call as the `.mro` writes it. So a
+  launch value can change the run's forks, gates and pruned calls as an
+  invocation literal would under `mrp`. `conf/base.config` sets no entry
+  input, as a config value would override the default and not a params
+  file's null.
+- **Defaults.** The default is the Groovy literal of the call's value as
+  Martian encodes it (`groovy`), which Groovy's `JsonOutput` encodes back to
+  JSON Martian parses as the same literal: a whole number keeps its text, a
+  number with a fraction or an exponent is a `Double`, as Groovy's default
+  `BigDecimal` encodes `1.234567e+06` as the int `1234567`, and a string
+  escapes its control characters. A split input's default is the call's split
+  value as `{"split": v}`.
 - **Declared parameters.** `main.nf`'s `params` block declares every launch
   parameter, the entry inputs and the project's own (`paramsBlock`, from the
   same model as `conf/base.config`;
