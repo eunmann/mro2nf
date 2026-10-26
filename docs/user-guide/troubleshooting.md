@@ -36,6 +36,24 @@ The metadata directory holds `_args`, `_jobinfo`, `_outs`, `_stdout`,
 `_stderr`, `_log`, and `_errors` for an exception or `_assert` for an `ASSERT`:
 the same files `mrp` writes for the job.
 
+### On AWS Batch
+
+On `awsbatch` the work directory is on S3, and a task runs in a directory on
+its instance. Nextflow copies a task's outputs to S3 only when the task
+succeeds, so a failed task's S3 work directory holds Nextflow's own files and
+not the job's metadata directory:
+
+- `.command.sh` and `.command.run`, the task's script and its wrapper;
+- `.command.out` and `.command.err`, its stdout and stderr, and `.command.log`,
+  both together, which is also the Batch job's CloudWatch log stream;
+- `.command.trace` and `.exitcode`.
+
+`mre` copies the job's stdout and stderr, its `_stdout` and `_stderr`, to the
+task's, and its error names the job and carries the text of `_errors` or
+`_assert`, so `.command.err` and `.command.log` hold them. `_args`, `_jobinfo`,
+`_outs` and `_log` are not kept. To read them, run the pipeline with the same
+inputs on the `docker` profile, whose work directory keeps them.
+
 ## Error messages
 
 ### The pipeline and its code
