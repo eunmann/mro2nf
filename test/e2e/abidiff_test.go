@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -376,9 +377,6 @@ var (
 	// mrpPhaseDir matches mrp's phase dirs, which carry a -u<uuid> suffix behind a
 	// plain-named symlink on current mrp and none on older pipestances.
 	mrpPhaseDir = regexp.MustCompile(`^(split|join|chnk[0-9]+)(-u[0-9a-f]+)?$`)
-	// chunkDir names a chunk's metadata dir, mrp's and `mre stage`'s main
-	// phase alike.
-	chunkDir = regexp.MustCompile(`^chnk[0-9]+$`)
 	// mrpInvocationCall reads the callable from a fork's _invocation, which
 	// mrp writes as `call <STAGE>(` or `call <STAGE> as <ALIAS>(`, and a
 	// mapped pipeline's fork as `map call <PIPELINE>(`.
@@ -409,7 +407,7 @@ func collectMrpInvocations(ps string, rules abiRules) ([]abiInvocation, error) {
 		}
 
 		phase := m[1]
-		if strings.HasPrefix(phase, "chnk") {
+		if job.IsChunkName(phase) {
 			phase = phaseMain
 		}
 
@@ -538,7 +536,7 @@ func collectNextflowInvocations(proj string, rules abiRules) ([]abiInvocation, e
 		}
 
 		phase := filepath.Base(meta)
-		if chunkDir.MatchString(phase) {
+		if job.IsChunkName(phase) {
 			phase = phaseMain
 		}
 

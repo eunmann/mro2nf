@@ -403,4 +403,16 @@ func TestChunkName(t *testing.T) {
 	if want := []string{"chnk0", "chnk3", "chnk00", "chnk09"}; !slices.Equal(got, want) {
 		t.Errorf("chunk names %v, mrp's %v", got, want)
 	}
+
+	for _, name := range got {
+		if !IsChunkName(name) {
+			t.Errorf("IsChunkName(%q) = false for a chunk name", name)
+		}
+	}
+
+	for _, name := range []string{"chnk", "chnkx", "chnk0x", "join.json", "resources.tsv"} {
+		if IsChunkName(name) {
+			t.Errorf("IsChunkName(%q) = true, want false", name)
+		}
+	}
 }

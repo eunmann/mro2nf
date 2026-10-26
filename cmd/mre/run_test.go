@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -261,8 +262,8 @@ func TestRunStampsStage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if fi.Mode().Perm() != job.DirPerm {
-		t.Errorf("metadata dir mode %v, want %v", fi.Mode().Perm(), os.FileMode(job.DirPerm))
+	if fi.Mode().Perm() != fileio.DirPerm {
+		t.Errorf("metadata dir mode %v, want %v", fi.Mode().Perm(), os.FileMode(fileio.DirPerm))
 	}
 }
 

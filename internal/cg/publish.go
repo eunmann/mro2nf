@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -320,7 +321,7 @@ func (p *pipestance) copy(leaf, root string, src placedSource) (string, error) {
 	p.n++
 	at := filepath.Join(root, strconv.Itoa(p.n), filepath.Base(leaf))
 
-	if err := os.MkdirAll(filepath.Dir(at), dirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(at), fileio.DirPerm); err != nil {
 		return "", fmt.Errorf("pipeline outs: %w", err)
 	}
 
@@ -559,7 +560,11 @@ func (p *pipestance) manifest(path string) error {
 
 	slices.SortFunc(entries, func(a, b published) int { return strings.Compare(a.Path, b.Path) })
 
-	return writeRecord(path, entries)
+	if err := fileio.WriteJSON(path, entries); err != nil {
+		return fmt.Errorf("published tree: %w", err)
+	}
+
+	return nil
 }
 
 // entries are the entries of the published tree at outs/, none where
@@ -706,7 +711,7 @@ func (p *pipestance) emptyDirAt(rel, dir string) (published, error) {
 	p.n++
 	local := path.Join(externalDir, strconv.Itoa(p.n), path.Base(rel))
 
-	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(local)), dirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(local)), fileio.DirPerm); err != nil {
 		return published{}, fmt.Errorf("publish outs/%s: %w", rel, err)
 	}
 
@@ -726,7 +731,7 @@ func (p *pipestance) publishedAt(rel string, src placedSource, dir string) (publ
 	local := path.Join(externalDir, strconv.Itoa(p.n), path.Base(rel))
 	at := filepath.Join(dir, filepath.FromSlash(local))
 
-	if err := os.MkdirAll(filepath.Dir(at), dirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(at), fileio.DirPerm); err != nil {
 		return published{}, fmt.Errorf("publish outs/%s: %w", rel, err)
 	}
 
@@ -867,12 +872,8 @@ func writeJSONFile(path string, v any) error {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-
-	if err := os.WriteFile(path, raw, filePerm); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	if err := fileio.Write(path, raw); err != nil {
+		return fmt.Errorf("outs json: %w", err)
 	}
 
 	return nil

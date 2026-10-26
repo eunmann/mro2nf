@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -131,11 +132,15 @@ func (g *Graph) writeForks(spec PostSpec, s *stagedStore) error {
 		return err
 	}
 
-	if err := writeFile(spec.ForkValues, strings.Join(recs, " ")); err != nil {
-		return err
+	if err := fileio.Write(spec.ForkValues, []byte(strings.Join(recs, " "))); err != nil {
+		return fmt.Errorf("post forks: %w", err)
 	}
 
-	return writeFile(spec.ForkRefs, shim.JoinRefs(refs))
+	if err := fileio.Write(spec.ForkRefs, []byte(shim.JoinRefs(refs))); err != nil {
+		return fmt.Errorf("post forks: %w", err)
+	}
+
+	return nil
 }
 
 // posted writes the forks of every root the posting instance's stage feeds,
@@ -236,7 +241,7 @@ func (c counted) with(p Part, n int) counted {
 // root writes root's forks under the parts of fixed, the posting instance.
 func (w forkWriter) root(root *syntax.CallGraphStage, fixed counted) error {
 	dir := filepath.Join(w.dir, root.Fqid)
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := os.MkdirAll(dir, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
@@ -312,8 +317,8 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 		rec := Element{Fork: at.fork, Lens: at.lens, Position: i}.encode()
 
 		if !values {
-			if err := writeRecord(filepath.Join(w.dir, root.Fqid, name, elementFile), rec); err != nil {
-				return err
+			if err := fileio.WriteJSON(filepath.Join(w.dir, root.Fqid, name, elementFile), rec); err != nil {
+				return fmt.Errorf("fork %d of %s: %w", i, root.Fqid, err)
 			}
 
 			continue
@@ -369,8 +374,11 @@ func (w forkWriter) item(sub, name string, el json.Marshaler, param *syntax.Stru
 	*w.refs = append(*w.refs, shim.RefRecords(dir, refs)...)
 
 	file, r := rec.elementRecord()
+	if err := fileio.WriteJSON(filepath.Join(dir, file), r); err != nil {
+		return fmt.Errorf("write element %s: %w", dir, err)
+	}
 
-	return writeRecord(filepath.Join(dir, file), r)
+	return nil
 }
 
 // record adds rec, named name, to the post's value records.

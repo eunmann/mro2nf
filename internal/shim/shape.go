@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/eunmann/mro2nf/internal/fileio"
 )
 
 // shapeFile names the file beside a leaf in its ordinal dir that records
@@ -144,7 +146,7 @@ func restoreShape(ordinal string) error {
 			return err
 		}
 
-		if err := os.MkdirAll(at, dirPerm); err != nil {
+		if err := os.MkdirAll(at, fileio.DirPerm); err != nil {
 			return fmt.Errorf("restore dir %s: %w", at, err)
 		}
 	}
@@ -155,7 +157,7 @@ func restoreShape(ordinal string) error {
 			return err
 		}
 
-		if err := os.MkdirAll(filepath.Dir(at), dirPerm); err != nil {
+		if err := os.MkdirAll(filepath.Dir(at), fileio.DirPerm); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(at), err)
 		}
 

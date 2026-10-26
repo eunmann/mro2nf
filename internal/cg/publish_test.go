@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
@@ -380,7 +381,7 @@ func readManifest(t *testing.T, path string) []published {
 	t.Helper()
 
 	var entries []published
-	if err := readRecord(path, &entries); err != nil {
+	if err := fileio.ReadJSON(path, &entries); err != nil {
 		t.Fatal(err)
 	}
 

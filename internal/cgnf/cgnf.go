@@ -18,17 +18,12 @@ import (
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
 //go:embed assets/stage.nf
 var stageModule string
-
-const (
-	dirPerm  = 0o755
-	filePerm = 0o644
-	execPerm = 0o755
-)
 
 var (
 	errReservedParam   = errors.New("entry input name is reserved by the generated project")
@@ -142,10 +137,10 @@ func (p *project) addTargetFiles(files map[string]string) error {
 // the one a user runs.
 func fileMode(name string) os.FileMode {
 	if name == "package.sh" {
-		return execPerm
+		return fileio.ExecPerm
 	}
 
-	return filePerm
+	return fileio.FilePerm
 }
 
 // mroAssets is the project's copy of the .mro files the entry compiles
@@ -225,11 +220,7 @@ func (p *project) stage(fqid string) (*syntax.Stage, error) {
 }
 
 func writeFile(path, body string, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
-		return fmt.Errorf("emit: %w", err)
-	}
-
-	if err := os.WriteFile(path, []byte(body), mode); err != nil {
+	if err := fileio.Write(path, []byte(body)); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 

@@ -61,6 +61,7 @@ internal/
   job/               → runs one stage job through mrjob as mrp runs it
   types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
+  fileio/            → file and record writers with mrp's modes
   buildinfo/         → the build's version, shared by mro2nf and mre (PLAN checks they match)
 ```
 

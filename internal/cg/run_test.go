@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -237,7 +238,7 @@ func (s *standIn) staged(items []string) string {
 	s.t.Helper()
 
 	in := s.next("in")
-	if err := os.MkdirAll(in, dirPerm); err != nil {
+	if err := os.MkdirAll(in, fileio.DirPerm); err != nil {
 		s.t.Fatal(err)
 	}
 

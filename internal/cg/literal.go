@@ -18,34 +18,27 @@ import (
 // threads, mem_gb or vmem_gb outside float32, which mrp refuses.
 var ErrLiteralRange = errors.New("number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32")
 
-// recoverLiteral runs parse, a parse by Martian's parser, and returns the
-// number literal it panics on as out of range, or parse's error. Martian's
-// lexer admits a 19-digit int beyond int64 and a float beyond float64, and
-// its parser panics on either by design (syntax/parsenum.go parseInt,
-// parseFloat, parseFloat32), so recovering is the only way to refuse one as
-// an error. Any other panic is re-raised.
-func recoverLiteral(parse func() error) (string, error) {
-	var lit string
+// recoverLiteral runs parse, a parse by Martian's parser of what names, and
+// returns the number literal it panics on as out of range, or parse's
+// error. Martian's lexer admits a 19-digit int beyond int64 and a float
+// beyond float64, and its parser panics on either by design
+// (syntax/parsenum.go parseInt, parseFloat, parseFloat32), so recovering is
+// the only way to refuse one as an error. Its compiler also panics on some
+// source it should refuse (syntax/compile_calls.go checkMappings), which
+// mrp cannot run either: any other panic is what's compile error.
+func recoverLiteral(what string, parse func() error) (string, error) {
+	var err error
 
-	err := func() error {
-		defer func() {
-			r := recover()
-			if r == nil {
-				return
-			}
+	p := recovered(func() { err = parse() })
+	if p == nil {
+		return "", err
+	}
 
-			l, ok := rangePanic(r)
-			if !ok {
-				panic(r)
-			}
+	if lit, ok := rangePanic(p); ok {
+		return lit, nil
+	}
 
-			lit = l
-		}()
-
-		return parse()
-	}()
-
-	return lit, err
+	return "", fmt.Errorf("%s: %w: %v (%T)", what, errCompilerPanic, p, p)
 }
 
 // parseMRO parses the .mro source src read from path, without its includes,
@@ -53,7 +46,7 @@ func recoverLiteral(parse func() error) (string, error) {
 func parseMRO(src []byte, path string) (*syntax.Ast, string, error) {
 	var file *syntax.Ast
 
-	lit, err := recoverLiteral(func() error {
+	lit, err := recoverLiteral("parse "+path, func() error {
 		var p syntax.Parser
 
 		f, err := p.UncheckedParse(src, path)
@@ -86,7 +79,7 @@ func rangePanic(r any) (string, bool) {
 // each argument of an invocation (syntax.Parser.ParseValExp), refusing a
 // number literal out of range as mrp's parser does.
 func CheckValue(raw []byte) error {
-	lit, err := recoverLiteral(func() error {
+	lit, err := recoverLiteral("parse", func() error {
 		var p syntax.Parser
 
 		if _, err := p.ParseValExp(raw); err != nil {
