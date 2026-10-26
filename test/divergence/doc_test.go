@@ -12,7 +12,7 @@ import (
 
 const (
 	divergencesDoc  = "../../docs/reference/divergences.md"
-	featureCoverage = "../../docs/reference/feature-coverage.md"
+	featureCoverage = "../../docs/feature-coverage.md"
 )
 
 // TestDivergencesDocIsCurrent fails when the checked-in divergence table of

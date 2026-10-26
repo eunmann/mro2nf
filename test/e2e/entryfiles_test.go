@@ -91,7 +91,7 @@ func TestEntryFileGlobCharName(t *testing.T) {
 
 			runLog := readRunLog(t, proj)
 
-			for _, want := range []string{tc.want, "Nextflow staging limitation, see docs/user-guide/files-and-paths.md"} {
+			for _, want := range []string{tc.want, "Nextflow staging limitation, see mro2nf's docs/usage.md#file-names-nextflow-cannot-stage"} {
 				if !strings.Contains(runLog, want) {
 					t.Errorf("run log does not report %q:\n%s", want, runLog)
 				}

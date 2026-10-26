@@ -2,8 +2,9 @@
 
 These scripts break a finished `awsbatch` run's wall time into its critical path and per-task overheads.
 They also compute the run's floors and rank where the gap above those floors goes.
-[AWS validation](../../../docs/reference/aws-validation.md) records what they measured on CellRanger, and how to
-recompute it from the archived runs.
+The October 2026 [AWS validation record](https://github.com/eunmann/mro2nf/blob/64930f8b3801f317d068c37c360a4445aeba4255/docs/reference/aws-validation.md)
+holds what they measured on CellRanger; [below](#the-archived-cellranger-runs) is how to recompute
+it from the archived runs.
 
 They need Python 3 (standard library only) and AWS CLI v2. Every AWS call is read-only and runs in
 the CLI's configured region and credentials. The fetch step needs the run's S3 work directory, which
@@ -88,7 +89,7 @@ By default it starts a day before the run's first job.
 
 ## The archived CellRanger runs
 
-To recompute the tables of [AWS validation](../../../docs/reference/aws-validation.md), build a run directory per
+To recompute the tables of the AWS validation record, build a run directory per
 run (`runs/3`, `runs/4`, `runs/6`, `runs/7`) from the archive's files:
 
 | Run directory file | Archive source |

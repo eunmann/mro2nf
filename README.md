@@ -1,70 +1,66 @@
 # mro2nf
 
-**Run Martian pipelines as native Nextflow.**
-
-mro2nf transpiles a [Martian](https://martian-lang.org) pipeline (`.mro`) into a
-[Nextflow](https://www.nextflow.io) project. The project runs your existing
-stage code, unchanged, and publishes the same outputs that Martian's own
-runner, `mrp`, publishes.
-
-```mermaid
-flowchart LR
-    mro["pipeline.mro<br/>+ stage code"] -->|mro2nf| project["Nextflow project<br/>main.nf · stage.nf · nextflow.config"]
-    project -->|nextflow run| run["PLAN → one task per mrp job → OUTS"]
-    run --> results["results/<br/>same outputs as mrp"]
-```
+mro2nf transpiles a [Martian](https://martian-lang.org) pipeline (`.mro`) into
+a [Nextflow](https://www.nextflow.io) project. The project runs your stage
+code unchanged and publishes the same outputs as Martian's runner, `mrp`.
 
 ## Why
 
 Martian pipelines, such as 10x Genomics' Cell Ranger, run under `mrp`, which
 supports a local machine and a few grid schedulers. Nextflow runs the same
-work on many more targets and brings its own tooling. mro2nf joins the two:
+work on many more targets, with caching, retries, reports and cloud executors.
+mro2nf gives a Martian pipeline those targets without changing the pipeline.
 
-- **Your stage code runs as is.** Each task runs the original stage through
-  Martian's own adapter, with the same inputs (`_args`) and outputs (`_outs`)
-  `mrp` would give it.
-- **The outputs are the same as `mrp`'s.** The test suite runs its fixtures
-  under both `mrp` and Nextflow and compares the results: the published files
-  byte for byte, `pipeline_outs.json`, and every stage's inputs and outputs.
-  A fixture `mrp` fails must fail the same way. The known differences are
-  listed, with the reason for each.
-- **It runs wherever Nextflow runs.** One project runs locally, on Slurm,
-  SGE, LSF or PBS, in Docker, on AWS Batch, and on AWS HealthOmics. You pick
-  the target at launch with `-profile`.
-- **It costs no more than `mrp`.** A run has one task per job `mrp` would run,
-  plus one task at the start and one at the end. Each task stages only the
-  data it reads.
-- **It is plain Nextflow.** `-resume`, `-with-report`, `withName:` selectors
-  and `nextflow log` work as usual.
+It promises two things:
 
-## How it works
+- **The stage ABI.** Each stage job gets the same `_args` and `_jobinfo`, and
+  writes `_outs`, exactly as under `mrp`, through Martian's own adapter.
+- **The same outputs.** A run publishes the `outs/` tree and
+  `pipeline_outs.json` `mrp` publishes, on every run. The tests run every
+  fixture under both runners and compare them; each known difference is
+  listed with its reason.
 
-mro2nf compiles the pipeline with Martian's own compiler and wires one
-Nextflow process per stage call (three for a split stage: split, chunk and
-join). At run time, a small shim, `mre`, sits between
-Nextflow and the stage: it builds each stage's arguments, runs the stage
-exactly as `mrp` runs it, and hands its outputs back to Nextflow. Nextflow
-does the scheduling, staging, caching, retries and publishing.
+Everything between stage jobs is plain Nextflow: channels, joins, `path`
+staging, `-resume`, profiles. A run has one task per job `mrp` would run,
+plus one at the start and one at the end, and each task stages only the data
+it reads. One project runs locally, on Slurm, SGE, LSF or PBS, in Docker, on
+AWS Batch, and on AWS HealthOmics.
 
-[Architecture overview](docs/architecture/overview.md) explains the design.
+```mermaid
+flowchart LR
+    mro["pipeline.mro<br/>+ stage code"] -->|mro2nf| project["Nextflow project<br/>main.nf, stage.nf, nextflow.config"]
+    project -->|nextflow run| run["PLAN, one task per mrp job, OUTS<br/>each stage task runs mre + mrjob"]
+    run --> results["results/<br/>the same outputs as mrp"]
+```
+
+## Quick start
+
+From a clone, with mro2nf [installed](docs/usage.md#install) and Nextflow
+26.04 or later:
+
+```bash
+mro2nf -o out testdata/split_test/pipeline.mro
+cd out && echo '{"values": [5, 6, 7]}' > inputs.json
+nextflow run main.nf -params-file inputs.json
+cat results/pipeline_outs.json
+```
 
 ## Documentation
 
-| I want to… | Read |
+| Page | Covers |
 |---|---|
-| Install mro2nf and run a first pipeline | [Getting started](docs/getting-started.md) |
-| Run, size and troubleshoot a pipeline | [User guide](docs/README.md#user-guide) |
-| Check whether a Martian feature is supported | [Feature coverage](docs/reference/feature-coverage.md) |
-| See every known difference from `mrp` | [Divergences](docs/reference/divergences.md) |
-| Understand how the transpiler works | [Architecture](docs/README.md#architecture) |
-| Build, test or release mro2nf | [Contributing](CONTRIBUTING.md) |
+| [Usage](docs/usage.md) | install, transpile, run, profiles, parameters, resources, images, files, troubleshooting, upgrading, compatibility |
+| [Feature coverage](docs/feature-coverage.md) | which Martian features work |
+| [Divergences](docs/reference/divergences.md) | every known difference from `mrp`, and why |
+| [Design](docs/design.md) | how it works, with links to the code |
+| [Contributing](CONTRIBUTING.md) | building, testing, CI and releases |
+| [Security](SECURITY.md) | what stage code can do, and how to report a vulnerability |
 
-[All documentation](docs/README.md)
+Changes are listed in each [release's notes](https://github.com/eunmann/mro2nf/releases).
 
 ## License
 
-MIT; see [`LICENSE`](LICENSE). The binaries and the runtime image also carry
-third-party code, listed with its licenses in
-[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) (`make notices` regenerates
-it). The vendored Martian adapters
-keep Martian's license in [`vendor-martian/LICENSE`](vendor-martian/LICENSE).
+MIT; see [`LICENSE`](LICENSE). The binaries and the runtime image carry
+third-party code, listed in [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES). The
+vendored Martian adapters keep Martian's license in
+[`vendor-martian/LICENSE`](vendor-martian/LICENSE).

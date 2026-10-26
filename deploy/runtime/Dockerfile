@@ -2,7 +2,7 @@
 # the generated project's tasks find mre: the `mre` shim, the `mrjob` beside it
 # that py and comp stages run under, and a copy of the Martian adapters mre
 # embeds, with their LICENSE and THIRD_PARTY_NOTICES. A pipeline's image builds
-# FROM it and adds the pipeline's code (docs/user-guide/container-images.md).
+# FROM it and adds the pipeline's code (docs/usage.md, "Container images").
 #
 # Use the tag matching the mro2nf version that generated your project so the mre
 # ABI matches. Published multi-arch (linux/amd64, linux/arm64) on each release.

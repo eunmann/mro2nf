@@ -3,8 +3,8 @@
 Transpiles Martian (`.mro`) pipelines into Nextflow projects. Generated Nextflow
 orchestrates the DAG/splits/forks/resources; each process runs the **original**
 Martian stage code through the Martian adapter ABI via the `mre` shim. See
-`docs/architecture/` for the end-to-end design, starting with
-`docs/architecture/overview.md`.
+`docs/design.md` for the end-to-end design and `docs/usage.md` for the user
+guide.
 
 ## North star (the correctness + performance bar)
 
@@ -61,6 +61,7 @@ internal/
   job/               → runs one stage job through mrjob as mrp runs it
   types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
+  fileio/            → file and record writers with mrp's modes
   buildinfo/         → the build's version, shared by mro2nf and mre (PLAN checks they match)
 ```
 
