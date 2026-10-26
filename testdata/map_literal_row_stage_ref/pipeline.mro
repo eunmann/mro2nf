@@ -1,0 +1,50 @@
+# #631: PER_ROW splits a literal of known length whose second row is a
+# stage output, so ROW's forks there come from EMIT's outs: three of them,
+# beside the literal row's two. The literal's known length bounds only
+# PER_ROW; ROW's source is of unknown length, and EMIT's post writes its
+# forks (mrp: yss = [[3, 6], [0, 3, 6]]). The literal row's forks read
+# none of EMIT's outs, so they stage none.
+stage EMIT(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/emit",
+)
+
+stage ROW(
+    in  int x,
+    out int y,
+    src py  "stages/row",
+)
+
+pipeline PER_ROW(
+    in  int[] row,
+    out int[] ys,
+)
+{
+    map call ROW(
+        x = split self.row,
+    )
+
+    return (
+        ys = ROW.y,
+    )
+}
+
+pipeline TOP(
+    out int[][] yss,
+)
+{
+    call EMIT(
+        n = 3,
+    )
+
+    map call PER_ROW(
+        row = split [[1, 2], EMIT.xs],
+    )
+
+    return (
+        yss = PER_ROW.ys,
+    )
+}
+
+call TOP()

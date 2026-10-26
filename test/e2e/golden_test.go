@@ -32,6 +32,9 @@ var goldenCases = []goldenCase{
 	{"map_fork_upstream", "map_fork_upstream", "expected/outs.json"},
 	// #595: a map call over another map call's outs, both sized by a stage.
 	{"map_chain_runtime", "map_chain_runtime", "expected/outs.json"},
+	// A map call over a literal whose second row is a stage output: only
+	// that row's forks read the stage.
+	{"map_literal_row_stage_ref", "map_literal_row_stage_ref", "expected/outs.json"},
 	{"struct_min", "struct_min", "expected/stats_pipe_outs.json"},
 	{"modifiers_min", "modifiers_min", "expected/top_outs.json"},
 	{"alias_min", "alias_min", "expected/p_outs.json"},
