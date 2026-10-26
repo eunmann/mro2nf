@@ -332,6 +332,94 @@
     },
     "wall_seconds": 14.8
   },
+  "mapgather_w16": {
+    "name": "mapgather_w16",
+    "tasks": 67,
+    "plumbing_tasks": 2,
+    "stage_tasks": 65,
+    "mrp_jobs": 65,
+    "processes": 7,
+    "stage_processes": 5,
+    "plumbing_processes": 2,
+    "plumbing": [
+      "OUTS",
+      "PLAN"
+    ],
+    "edges": 95,
+    "rchar_bytes": 150233088,
+    "wchar_bytes": 10715443,
+    "refs": 64,
+    "producers": 32,
+    "multiplier": 2.0,
+    "staged_bytes": 520170,
+    "stage_staged_bytes": 516844,
+    "uploaded_bytes": 3372250,
+    "plumbing_uploaded_bytes": 19947,
+    "restaged_bytes": 0,
+    "probe_writes": 64,
+    "plumbing_probe_refs": 0,
+    "max_argv_bytes": 0,
+    "max_arg_bytes": 0,
+    "stage_staged_bytes_max": {
+      "N0_A_LIT": 0,
+      "N3_B_LIT": 16116,
+      "N2_A_RUN": 0,
+      "N4_B_RUN": 16188,
+      "N1_MKXS": 0
+    },
+    "stage_carried_bytes_max": {
+      "N0_A_LIT": 0,
+      "N3_B_LIT": 0,
+      "N2_A_RUN": 144,
+      "N4_B_RUN": 168,
+      "N1_MKXS": 0
+    },
+    "wall_seconds": 7.4
+  },
+  "mapgather_w4": {
+    "name": "mapgather_w4",
+    "tasks": 19,
+    "plumbing_tasks": 2,
+    "stage_tasks": 17,
+    "mrp_jobs": 17,
+    "processes": 7,
+    "stage_processes": 5,
+    "plumbing_processes": 2,
+    "plumbing": [
+      "OUTS",
+      "PLAN"
+    ],
+    "edges": 95,
+    "rchar_bytes": 39469977,
+    "wchar_bytes": 2767360,
+    "refs": 16,
+    "producers": 8,
+    "multiplier": 2.0,
+    "staged_bytes": 35340,
+    "stage_staged_bytes": 32100,
+    "uploaded_bytes": 861960,
+    "plumbing_uploaded_bytes": 5587,
+    "restaged_bytes": 0,
+    "probe_writes": 16,
+    "plumbing_probe_refs": 0,
+    "max_argv_bytes": 0,
+    "max_arg_bytes": 0,
+    "stage_staged_bytes_max": {
+      "N2_A_RUN": 0,
+      "N0_A_LIT": 0,
+      "N3_B_LIT": 3978,
+      "N4_B_RUN": 4047,
+      "N1_MKXS": 0
+    },
+    "stage_carried_bytes_max": {
+      "N2_A_RUN": 140,
+      "N0_A_LIT": 0,
+      "N3_B_LIT": 0,
+      "N4_B_RUN": 128,
+      "N1_MKXS": 0
+    },
+    "wall_seconds": 6.8
+  },
   "mapnested_w2": {
     "name": "mapnested_w2",
     "tasks": 6,
