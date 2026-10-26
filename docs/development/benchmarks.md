@@ -204,7 +204,9 @@ reporting with a direct probe-file measurement:
 | `wchar`/`rchar` | trace | aggregate characters written/read (copy-volume proxy) |
 | `refs`       | work-dir scan | task dirs into which the probe file is staged/materialized |
 | `multiplier` | `refs / producers` | **per-file transfer multiplier (ideal = 1)** |
-| `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run` | bytes of the inputs staged into all tasks / stage tasks / the largest task of each stage process |
+| `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run`, and the call each task gets | bytes of the inputs staged into all tasks / stage tasks, each with the run's call it stages as `call.b64` or its script writes / the largest task of each stage process, the call left out, as every `mrp` job's `_jobinfo` carries the invocation too |
+| `stage_call_bytes_max` | `call.b64`, staged or in each `.command.sh` | the most bytes of the run's call one task of each stage process gets |
+| `output_bytes` / `job_bytes` | the `outputs` each `.command.run` header declares, and each job's `files` dir | bytes of the files the stage tasks' declared outputs hold, each path once, what an object store uploads / bytes the stage jobs wrote, the data those outputs carry |
 | `stage_carried_bytes_max` | the `values` here-document in each `.command.sh` | the most bytes of value records one task of each stage process carries: upstream outs passed by value rather than staged |
 | `uploaded_bytes` / `plumbing_uploaded_bytes` | task work dirs | bytes of the files all tasks / plumbing tasks wrote, every hard link counted |
 | `restaged_bytes` | task work dirs and `nxf_stage` | bytes of the files tasks wrote that are a hard link to, or a byte copy of, a file they staged |
@@ -248,7 +250,11 @@ independent checks; the fifth is the differential's:
   reads is referenced where it was staged, not copied into each fork, by a
   non-split stage (#498) or by a split stage's split, chunks or join (#507).
   Per fork such a copy would read flat; per producer, the unit of the data,
-  it grows with the width.
+  it grows with the width. And no group's `output_bytes` per byte of
+  `job_bytes` may be higher at a wider width (within 5%): a file is uploaded
+  once, not once more per fork or element (#623). The jobs' data may grow
+  with the width, as `zip`'s `MKFILES` writes one file per fork; what the
+  tasks upload beyond it may not.
 - **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make

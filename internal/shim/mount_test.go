@@ -21,12 +21,7 @@ func mountedTree(t *testing.T) (shim.Roots, string, string) {
 	file := writeSelfNamed(t, filepath.Join(root, "b", "reads", "r1.fastq"))
 	writeSelfNamed(t, filepath.Join(root, "b", "ref", "genome.fa"))
 
-	roots, err := shim.NewRoots(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return roots, file, filepath.Join(root, "b", "ref") + "/"
+	return shim.NewRoots(root), file, filepath.Join(root, "b", "ref") + "/"
 }
 
 // TestMountedLeafStaysItsPath: a file leaf under a root is the same path in
@@ -159,7 +154,7 @@ func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 		bundle := filepath.Join(t.TempDir(), "outs")
 		_, err = shim.WriteItem(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs}, shim.Staged{})
 
-		if !rs.Holds(file) {
+		if !holds(t, rs, file) {
 			if err == nil {
 				t.Error("a strict confinement with no roots staged a link outside the task")
 			}

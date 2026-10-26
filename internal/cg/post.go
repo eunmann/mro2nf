@@ -59,22 +59,27 @@ type PostSpec struct {
 	Gates string
 }
 
-// Post checks the instance's outs as mrp does, and writes each fork of
-// every root this stage feeds and each element of every output a partner
-// reads as a dir under Forks or as a value record in ForkValues (item),
-// plus each such output's absent record as a value record, then the outs
-// field by field and, when asked, the gates they set.
+// Post checks the instance's outs as mrp does, and writes the outs field
+// by field, then each fork of every root this stage feeds and each element
+// of every output a partner reads as a dir under Forks or as a value
+// record in ForkValues (item), plus each such output's absent record as a
+// value record, and, when asked, the gates the outs set. An element names
+// a file its outs bundles hold by reference to the bundle it lies in.
 func (g *Graph) Post(spec PostSpec) error {
 	if slices.Contains([]string{spec.Fields, spec.Values, spec.FieldRefs, spec.Forks, spec.ForkValues, spec.ForkRefs}, "") {
 		return errPostDirs
 	}
 
-	s, err := g.post(spec)
+	s, err := g.posting(spec)
 	if err != nil {
 		return err
 	}
 
 	if err := g.writeFields(spec.Instance, s, spec); err != nil {
+		return err
+	}
+
+	if err := g.writeForks(spec, s); err != nil {
 		return err
 	}
 
@@ -85,7 +90,9 @@ func (g *Graph) Post(spec PostSpec) error {
 	return nil
 }
 
-func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
+// posting is the store of the posted instance's outs, checked as mrp
+// checks them.
+func (g *Graph) posting(spec PostSpec) (*stagedStore, error) {
 	in := spec.Instance
 
 	st, err := g.Stage(in.Node)
@@ -104,22 +111,29 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 		return nil, err
 	}
 
+	return s, nil
+}
+
+// writeForks writes the posted instance's fork and partner elements, each
+// file the outs bundles under spec's Fields hold named by reference.
+func (g *Graph) writeForks(spec PostSpec, s *stagedStore) error {
+	staged, err := spec.Staged.Own(spec.Fields)
+	if err != nil {
+		return fmt.Errorf("post forks: %w", err)
+	}
+
 	var recs, refs []string
 
-	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), opts: spec.Opts, staged: spec.Staged, values: true, recs: &recs, refs: &refs}
-	if err := w.posted(in); err != nil {
-		return nil, err
+	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), opts: spec.Opts, staged: staged, values: true, recs: &recs, refs: &refs}
+	if err := w.posted(spec.Instance); err != nil {
+		return err
 	}
 
 	if err := writeFile(spec.ForkValues, strings.Join(recs, " ")); err != nil {
-		return nil, err
+		return err
 	}
 
-	if err := writeFile(spec.ForkRefs, shim.JoinRefs(refs)); err != nil {
-		return nil, err
-	}
-
-	return s, nil
+	return writeFile(spec.ForkRefs, shim.JoinRefs(refs))
 }
 
 // posted writes the forks of every root the posting instance's stage feeds,

@@ -36,7 +36,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
 	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
-	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the call as mrp's invocation generator builds it")
+	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the gzip of the call as mrp's invocation generator builds it")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
 	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
@@ -237,7 +237,12 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 }
 
 func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
-	if err := writeText(f.call, base64.StdEncoding.EncodeToString([]byte(p.Call))); err != nil {
+	call, err := encodeCall(p.Call)
+	if err != nil {
+		return err
+	}
+
+	if err := writeText(f.call, call); err != nil {
 		return err
 	}
 
