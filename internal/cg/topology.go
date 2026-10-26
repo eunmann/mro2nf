@@ -34,17 +34,20 @@ type Topology struct {
 // root's forks come from, each staged as the one partner element at its
 // index.
 // Preflights are the preflight stages every instance of it waits for, each
-// at every fork.
+// at every fork. Collapsible is whether an invocation's entry can fork it
+// on fewer of its roots (Source.Witness), where it runs once per fork of
+// those it keeps (PlanNode.Collapse).
 type TopoNode struct {
-	Fqid       string   `json:"fqid"`
-	Stage      string   `json:"stage"`
-	Split      bool     `json:"split"`
-	Roots      []string `json:"roots"`
-	Reads      []Read   `json:"reads"`
-	Zips       []Zip    `json:"zips"`
-	Gates      []Gate   `json:"gates"`
-	Preflights []string `json:"preflights"`
-	Off        bool     `json:"off"`
+	Fqid        string   `json:"fqid"`
+	Stage       string   `json:"stage"`
+	Split       bool     `json:"split"`
+	Roots       []string `json:"roots"`
+	Reads       []Read   `json:"reads"`
+	Zips        []Zip    `json:"zips"`
+	Gates       []Gate   `json:"gates"`
+	Preflights  []string `json:"preflights"`
+	Off         bool     `json:"off"`
+	Collapsible bool     `json:"collapsible,omitempty"`
 }
 
 // Zip is a node's split over its root Root of node Node's output Output,
@@ -84,13 +87,17 @@ type Read struct {
 // TopoRoot is one fork root: the outer roots its fork set varies with, the
 // stage whose outs fix its forks, or "" when the invocation's entry values
 // do, whether its forks are a map's keys, not an array's positions, and
-// whether the call fixes them at exactly one under every outer fork.
+// whether the call fixes them at exactly one under every outer fork, or at
+// none whatever its gates hold. Entry is whether an invocation's entry can
+// fix the forks of a root the witness's stage does (Source.Witness).
 type TopoRoot struct {
 	Fqid     string   `json:"fqid"`
 	Outer    []string `json:"outer"`
 	Producer string   `json:"producer"`
 	Keyed    bool     `json:"keyed"`
 	Single   bool     `json:"single,omitempty"`
+	Empty    bool     `json:"empty,omitempty"`
+	Entry    bool     `json:"entry,omitempty"`
 }
 
 // Topology computes g's topology, failing on a shape whose data the
@@ -143,8 +150,49 @@ func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
 	r := TopoRoot{Fqid: root.Fqid, Outer: fqids(g.outerRoots(root)), Keyed: sp != nil && sp.Source.CallMode() == syntax.ModeMapCall}
 	r.Producer, _ = g.Producer(root)
 	r.Single = sp != nil && sp.Source.KnownLength() && (sp.Source.ArrayLength() == 1 || len(sp.Source.Keys()) == 1)
+	r.Empty = sp != nil && emptySource(sp, sp.Source)
 
 	return r, nil
+}
+
+// emptySource reports whether src, the source of split sp, expands to no
+// fork whatever the gates it holds evaluate to, case for case as mrp
+// expands it (core/fork.go:1412 expandForkPartFromSource, 1441
+// expandForkPartFromExp): a disabled source has none, and an enabled one
+// the forks of its value, here an empty or null literal.
+func emptySource(sp *syntax.SplitExp, src syntax.MapCallSource) bool {
+	switch s := src.(type) {
+	case *syntax.MergeExp:
+		return s.ForkNode == nil && emptySource(sp, s.MergeOver)
+	case *syntax.MapCallSet:
+		return s.Master != nil && emptySource(sp, s.Master)
+	case syntax.Exp:
+		return emptyExp(sp, s)
+	default:
+		return false
+	}
+}
+
+// emptyExp is emptySource of an expression source.
+func emptyExp(sp *syntax.SplitExp, e syntax.Exp) bool {
+	switch s := e.(type) {
+	case *syntax.DisabledExp:
+		if d, ok := s.Disabled.(*syntax.SplitExp); ok && d.Call == sp.Call {
+			return false
+		}
+
+		return emptyExp(sp, s.Value)
+	case *syntax.MergeExp:
+		return s.ForkNode == nil && emptySource(sp, s.MergeOver)
+	case *syntax.NullExp:
+		return true
+	case *syntax.ArrayExp:
+		return len(s.Value) == 0
+	case *syntax.MapExp:
+		return len(s.Value) == 0
+	default:
+		return false
+	}
 }
 
 func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
@@ -523,24 +571,27 @@ func addRead(fields map[string]map[string]bool, ref *syntax.RefExp) {
 var errUncovered = errors.New("the invocation's call graph is not within the transpiled one")
 
 // Covers checks that every node, fork root and read of r is one of t's: the
-// stage nodes of r with the same stage, forked on t's roots or fewer,
-// reading no stage outs and gated by no stage t's does not, and every fork
-// root fed by the same producer, varying with the same outer roots. A node
-// forked on fewer is one Martian found constant across the others, which
-// an entry value can make it (#621); the driver runs it once per fork of
-// those it keeps (PlanNode.Collapse). An entry-fed root may vary with
+// stage nodes of r with the same stage, forked on t's roots or, where t's
+// node is Collapsible, fewer, reading no stage outs and gated by no stage
+// t's does not, and every fork root fed by the same producer, varying with
+// the same outer roots. A node forked on fewer is one Martian found
+// constant across the others, which an entry value can make it (#621); the
+// driver runs it once per fork of those it keeps (PlanNode.Collapse), which
+// it is wired for only where a variant of the witness shows it can be. An
+// entry-fed root may vary with
 // fewer: nested entry collections all of one length are a source of known
 // length, which varies with none (syntax InnerMapSource), and the plan
 // repeats its forks under every outer fork (entryForks). Of a node r
-// disables outright only its presence counts, and so do the roots only such
-// nodes are forked on: it runs at no fork.
+// disables outright, or forks on a root of no fork, only its presence
+// counts, and so do the roots only such nodes are forked on: it runs at no
+// fork, as the plan gives the root no fork either.
 func (t Topology) Covers(r Topology) error {
 	sh := shapeOf(r)
 	errs, live := t.coverNodes(r.Nodes, sh)
 
 	for _, rr := range r.Roots {
 		if live[rr.Fqid] && !slices.ContainsFunc(t.Roots, func(x TopoRoot) bool {
-			return x.Fqid == rr.Fqid && x.Producer == rr.Producer &&
+			return x.Fqid == rr.Fqid && (x.Producer == rr.Producer || (x.Entry && rr.Producer == "")) &&
 				(slices.Equal(x.Outer, rr.Outer) || (rr.Producer == "" && subset(x.Outer, rr.Outer)))
 		}) {
 			errs = append(errs, fmt.Errorf("%w: fork root %s fed by %q varying with %v", errUncovered, rr.Fqid, rr.Producer, rr.Outer))
@@ -554,16 +605,89 @@ func (t Topology) Covers(r Topology) error {
 	return errors.Join(errs...)
 }
 
+// withVariant is t with what v, another invocation's topology, holds that t
+// lacks: the reads of each node v runs at some fork and t holds, and of the
+// pipeline outs, a read of a node t's reader reads too widened to v's fields
+// and instances; whether v forks a node on fewer of its roots
+// (Collapsible); and of each root a stage fixes the forks of in t, whether
+// v's entry does (Entry).
+func (t Topology) withVariant(v Topology) Topology {
+	t.Nodes, t.Roots = slices.Clone(t.Nodes), slices.Clone(t.Roots)
+
+	for x, r := range t.Roots {
+		if r.Producer != "" && slices.ContainsFunc(v.Roots, func(vr TopoRoot) bool { return vr.Fqid == r.Fqid && vr.Producer == "" }) {
+			t.Roots[x].Entry = true
+		}
+	}
+
+	sh := shapeOf(v)
+	at := map[string]int{}
+
+	for x, n := range t.Nodes {
+		at[n.Fqid] = x
+	}
+
+	for _, vn := range v.Nodes {
+		x, ok := at[vn.Fqid]
+		if !ok || sh.runsNowhere(vn) {
+			continue
+		}
+
+		n := &t.Nodes[x]
+		n.Reads = mergeReads(n.Reads, vn.Reads, sh)
+		n.Collapsible = n.Collapsible || (len(vn.Roots) < len(n.Roots) && subset(n.Roots, vn.Roots))
+	}
+
+	t.Outs = mergeReads(t.Outs, v.Outs, sh)
+
+	return t
+}
+
+// mergeReads is have with each read of want it does not cover (readsCovered
+// in sh) added, or merged into its read of the same node.
+func mergeReads(have, want []Read, sh shape) []Read {
+	for _, w := range want {
+		if readsCovered(have, []Read{w}, sh) {
+			continue
+		}
+
+		i := slices.IndexFunc(have, func(h Read) bool { return h.Node == w.Node })
+		if i < 0 {
+			have = append(have, w)
+
+			continue
+		}
+
+		h := &have[i]
+		if h.Fields != nil && w.Fields != nil {
+			fields := append(slices.Clone(h.Fields), w.Fields...)
+			slices.Sort(fields)
+			h.Fields = slices.Compact(fields)
+		} else {
+			h.Fields = nil
+		}
+
+		if h.Patterns != nil && w.Patterns != nil {
+			h.Patterns = append(h.Patterns, w.Patterns...)
+		} else {
+			h.Patterns = nil
+		}
+	}
+
+	return have
+}
+
 // shape is what an invocation's call graph fixes that its read patterns
-// mean at: the roots each node is forked on, and the roots of exactly one
-// fork.
+// mean at: the roots each node is forked on, the roots of exactly one fork,
+// and those of none.
 type shape struct {
 	roots  map[string][]string
 	single map[string]bool
+	empty  map[string]bool
 }
 
 func shapeOf(r Topology) shape {
-	sh := shape{roots: map[string][]string{}, single: map[string]bool{}}
+	sh := shape{roots: map[string][]string{}, single: map[string]bool{}, empty: map[string]bool{}}
 
 	for _, n := range r.Nodes {
 		sh.roots[n.Fqid] = n.Roots
@@ -571,9 +695,16 @@ func shapeOf(r Topology) shape {
 
 	for _, rr := range r.Roots {
 		sh.single[rr.Fqid] = rr.Single
+		sh.empty[rr.Fqid] = rr.Empty
 	}
 
 	return sh
+}
+
+// runsNowhere reports whether node n of the invocation sh runs at no fork:
+// it is disabled outright, or forked on a root of no fork.
+func (sh shape) runsNowhere(n TopoNode) bool {
+	return n.Off || slices.ContainsFunc(n.Roots, func(r string) bool { return sh.empty[r] })
 }
 
 // at is p as it reads instances of up in the invocation sh, and whether it
@@ -614,7 +745,7 @@ func (sh shape) at(p ReadPattern, up string) (ReadPattern, bool) {
 }
 
 // coverNodes checks the nodes of r as Covers does, and returns the roots a
-// node r does not disable outright is forked on.
+// node that runs at some fork of r is forked on.
 func (t Topology) coverNodes(rs []TopoNode, sh shape) ([]error, map[string]bool) {
 	nodes := map[string]TopoNode{}
 	for _, n := range t.Nodes {
@@ -631,8 +762,8 @@ func (t Topology) coverNodes(rs []TopoNode, sh shape) ([]error, map[string]bool)
 		switch {
 		case !ok:
 			errs = append(errs, fmt.Errorf("%w: stage node %s", errUncovered, rn.Fqid))
-		case rn.Off:
-		case n.Stage != rn.Stage || n.Split != rn.Split || !subset(n.Roots, rn.Roots):
+		case sh.runsNowhere(rn):
+		case !n.runs(rn):
 			errs = append(errs, fmt.Errorf("%w: %s is stage %s forked on %v, not %s forked on %v", errUncovered, rn.Fqid, rn.Stage, rn.Roots, n.Stage, n.Roots))
 		case !readsCovered(n.Reads, rn.Reads, sh) || !gatesCovered(n.Gates, rn.Gates):
 			errs = append(errs, fmt.Errorf("%w: %s reads %v and is gated by %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Reads, rn.Gates, n.Reads, n.Gates))
@@ -641,11 +772,19 @@ func (t Topology) coverNodes(rs []TopoNode, sh shape) ([]error, map[string]bool)
 		}
 
 		for _, root := range rn.Roots {
-			live[root] = live[root] || !rn.Off
+			live[root] = live[root] || !sh.runsNowhere(rn)
 		}
 	}
 
 	return errs, live
+}
+
+// runs reports whether the project runs r, an invocation's node, as its
+// node n: the same stage, forked on n's roots, or on fewer where n is
+// Collapsible.
+func (n TopoNode) runs(r TopoNode) bool {
+	return n.Stage == r.Stage && n.Split == r.Split &&
+		(slices.Equal(n.Roots, r.Roots) || (n.Collapsible && subset(n.Roots, r.Roots)))
 }
 
 // readsCovered reports whether each of want is a read of have, of no more

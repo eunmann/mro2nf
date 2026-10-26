@@ -1,0 +1,44 @@
+# #621: rt_gate_split with a null source. A has no fork, so Martian makes
+# B's source `[] unless GATE.off`, which a gate feeds: B has no fork
+# whatever the gate holds, and the pipeline outs read the gate.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline RTG(
+    in  int[] some,
+    in  bool  skip,
+    out int[] b,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    map call SCALE as A(
+        value = split self.some,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B(
+        value = split A.scaled,
+    )
+
+    return (
+        b = B.scaled,
+    )
+}
+
+call RTG(
+    some = null,
+    skip = false,
+)

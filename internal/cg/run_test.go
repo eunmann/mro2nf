@@ -434,7 +434,7 @@ func (s *standIn) standInOuts(node string) json.RawMessage {
 
 	if ps := st.Callable().GetOutParams(); ps != nil {
 		for _, p := range ps.List {
-			fields = append(fields, strconv.Quote(p.GetId())+":"+string(witnessValue(s.g.types.Get(p.GetTname()), s.g.types, witnessWidth)))
+			fields = append(fields, strconv.Quote(p.GetId())+":"+string(witnessValue(s.g.types.Get(p.GetTname()), s.g.types, witnessWidth, false)))
 		}
 	}
 

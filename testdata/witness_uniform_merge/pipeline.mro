@@ -1,0 +1,121 @@
+# #621: merge_unforked_pipeline with samples of one length. Martian knows
+# the length of the mapped sub-pipeline WIDE, so SHOW gathers ECHO's forks
+# at its compile-time forks and reads them, which the witness's samples of
+# different lengths gather none of.
+stage ECHO(
+    in  string x,
+    out string y,
+    src py     "stages/echo",
+)
+
+stage COUNT(
+    in  ECHO[] vs,
+    out int    n,
+    src py     "stages/count",
+)
+
+stage SHOW(
+    in  string[][] yss,
+    out string     s,
+    src py         "stages/show",
+)
+
+pipeline INNER(
+    in  string x,
+    in  bool   off,
+    out ECHO   vs,
+)
+{
+    call ECHO(
+        x = self.x,
+    ) using (
+        disabled = self.off,
+    )
+
+    return (
+        vs = ECHO,
+    )
+}
+
+pipeline WIDE(
+    in  string x,
+    out string[] ys,
+)
+{
+    map call ECHO(
+        x = split ["u", "v", "w"],
+    )
+
+    call ECHO as OWN(
+        x = self.x,
+    )
+
+    return (
+        ys = ECHO.y,
+    )
+}
+
+pipeline OUTER(
+    in  string[] xs,
+    out COUNT    n,
+    out COUNT    n_lit,
+    out SHOW     s,
+)
+{
+    map call INNER(
+        x   = split self.xs,
+        off = true,
+    )
+
+    map call INNER as INNER_LIT(
+        x   = split ["p", "q"],
+        off = true,
+    )
+
+    map call WIDE(
+        x = split self.xs,
+    )
+
+    call COUNT(
+        * = INNER,
+    )
+
+    call COUNT as COUNT_LIT(
+        * = INNER_LIT,
+    )
+
+    call SHOW(
+        yss = WIDE.ys,
+    )
+
+    return (
+        n     = COUNT,
+        n_lit = COUNT_LIT,
+        s     = SHOW,
+    )
+}
+
+pipeline TOP(
+    in  string[][] xss,
+    out COUNT[]    ns,
+    out COUNT[]    n_lits,
+    out SHOW[]     ss,
+)
+{
+    map call OUTER(
+        xs = split self.xss,
+    )
+
+    return (
+        ns     = OUTER.n,
+        n_lits = OUTER.n_lit,
+        ss     = OUTER.s,
+    )
+}
+
+call TOP(
+    xss = [
+        ["a", "b"],
+        ["c", "d"],
+    ],
+)

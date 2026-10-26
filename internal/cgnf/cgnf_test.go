@@ -204,7 +204,7 @@ func TestEmitAliases(t *testing.T) {
 	for _, want := range []string{
 		"include { STAGE as N0_GEN } from './stage.nf'",
 		"include { STAGE as N1_DBL } from './stage.nf'",
-		"i1 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'MFU.DBL', [], true), [], false, false)",
+		"i1 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'MFU.DBL', [], true), [], false)",
 	} {
 		if !strings.Contains(up, want) {
 			t.Errorf("map_fork_upstream's main.nf lacks %q:\n%s", want, up)
@@ -288,7 +288,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1, channel.empty())",
+		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
 		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
@@ -337,9 +337,9 @@ func TestEmitPostsOneOutput(t *testing.T) {
 	}
 
 	for fixture, want := range map[string]string{
-		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1, channel.empty())",
-		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4, channel.empty())",
-		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip, channel.empty())",
+		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
+		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
+		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
 		"preflight_order":  "d0 = DONE(N0_TOP_CHECK.out.posted)",
 	} {
 		if main := wiringNF(readTree(t, emitFixture(t, fixture))); !strings.Contains(main, want) {
@@ -359,7 +359,7 @@ func TestEmitCarriesValueElements(t *testing.T) {
 	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4, channel.empty())",
+		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
 		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
 		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
 	} {
@@ -743,11 +743,12 @@ func TestEmitRefusesReservedParam(t *testing.T) {
 	}
 }
 
-// TestEmitRefusesAnUncoveredLiteral (#621): a .mro whose own invocation's
-// call graph is not within its witness's, here a null source that makes a
-// gate fix a map call's forks, fails the transpile, not the project's
-// first PLAN, and emits nothing.
-func TestEmitRefusesAnUncoveredLiteral(t *testing.T) {
+// TestEmitTranspilesANullSourceLiteral (#621): a .mro whose own invocation
+// has a null source, which makes a gate fix whether a map call's forks are
+// null and the pipeline outs read it, transpiles: the project's topology
+// holds the reads of the witness with that input null, and the map call's
+// root has no fork whatever the gate holds.
+func TestEmitTranspilesANullSourceLiteral(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "rt_gate_split", "pipeline.mro"))
 	if err != nil {
 		t.Fatal(err)
@@ -767,15 +768,8 @@ func TestEmitRefusesAnUncoveredLiteral(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := filepath.Join(t.TempDir(), "proj")
-	want := "the call of pipeline.mro: the invocation's call graph is not within the transpiled one"
-
-	if err := Emit(mro, Options{OutDir: out, MroPaths: []string{dir}}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Emit = %v, want an error containing %q", err, want)
-	}
-
-	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a refused emit left %s (stat: %v)", out, err)
+	if err := Emit(mro, Options{OutDir: filepath.Join(t.TempDir(), "proj"), MroPaths: []string{dir}}); err != nil {
+		t.Errorf("Emit = %v", err)
 	}
 }
 
@@ -887,8 +881,8 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 // zip_runtime_map: BY_AX zips ABC.m by key token).
 func TestEmitZipsByToken(t *testing.T) {
 	for _, c := range []struct{ fixture, fork, zip string }{
-		{"zip_runtime", "i2 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false), [], false, true)", "i2 = ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')"},
-		{"zip_runtime_map", "i3 = FORK(channel.of([[], [], [], []]), ELEMENTS(o1_forks, 'ZIP_RUNTIME_MAP.BY_AX', [], true), [], false, true)", "i3 = ZIP(i3, o0_forks, [], 'ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m', 0, 'none')"},
+		{"zip_runtime", "i2 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false), [], true)", "i2 = ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')"},
+		{"zip_runtime_map", "i3 = FORK(channel.of([[], [], [], []]), ELEMENTS(o1_forks, 'ZIP_RUNTIME_MAP.BY_AX', [], true), [], true)", "i3 = ZIP(i3, o0_forks, [], 'ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m', 0, 'none')"},
 	} {
 		main := readTree(t, emitFixture(t, c.fixture))["main.nf"]
 
@@ -922,7 +916,7 @@ func TestEmitGatesBySet(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "split_gate_entry")))
 
 	for _, want := range []string{
-		"o0_gates = GATES(N0_SRC.out.posted, b0.skip, channel.empty())",
+		"o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
 		"b1 = ENABLED(GATED(g1, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@']], [])",
 		"b2 = ENABLED(GATED(g2, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@']], [])",
 	} {

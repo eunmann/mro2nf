@@ -646,6 +646,15 @@ var mrpDiffCases = []mrpDiffCase{
 	// job does, and serves the rest.
 	{name: "witness_flag_disables"},
 	{name: "witness_drops_outer"},
+	// #621: invocations whose roots and reads the witness's variants hold:
+	// a null source that leaves a gated map call no fork (null_gated, with
+	// the gate off and on), samples of one length whose merge Martian
+	// expands (uniform_merge), and one row, whose length makes the entry,
+	// not a stage, fix a root's forks (known_inner).
+	{name: "witness_null_gated"},
+	{name: "witness_null_gated_off"},
+	{name: "witness_uniform_merge"},
+	{name: "witness_known_inner"},
 	// Two partner splits of one projected output inside a mapped
 	// sub-pipeline, their references leaving the outer index unresolved
 	// (gen-diff seed 862's witness).

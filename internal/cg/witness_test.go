@@ -60,12 +60,7 @@ func TestWitnessCoversLiteral(t *testing.T) {
 }
 
 func checkCovered(src Source, dir string) error {
-	w, err := src.Witness([]string{dir})
-	if err != nil {
-		return err
-	}
-
-	wt, err := w.Topology()
+	_, wt, err := src.Witness([]string{dir})
 	if err != nil {
 		return err
 	}
@@ -73,33 +68,62 @@ func checkCovered(src Source, dir string) error {
 	return src.CoversLiteral(wt, []string{dir})
 }
 
+// TestCoversLiteralRefuses (#621): a source whose own call's graph a
+// topology does not cover fails naming the call, which a transpile then
+// refuses rather than emit a project that cannot run it.
+func TestCoversLiteralRefuses(t *testing.T) {
+	dir := filepath.Join("..", "..", "testdata", "witness_flag_disables")
+
+	src, err := ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = src.CoversLiteral(Topology{}, []string{dir})
+	if !errors.Is(err, errUncovered) || !strings.Contains(err.Error(), "the call of pipeline.mro") {
+		t.Errorf("CoversLiteral of an empty topology = %v, want errUncovered naming the call", err)
+	}
+
+	_, wt, err := src.Witness([]string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := src.CoversLiteral(wt, []string{dir}); err != nil {
+		t.Errorf("CoversLiteral of its witness's topology = %v", err)
+	}
+}
+
 // TestCoversRefuses: a call graph with a node, a read or a fork root the
-// witness lacks is not covered; one whose node is forked on fewer of the
-// witness's roots is (#621).
+// witness lacks is not covered, nor a node forked on fewer of the witness's
+// roots unless the witness's is Collapsible (#621).
 func TestCoversRefuses(t *testing.T) {
 	w := Topology{
 		Nodes: []TopoNode{{Fqid: "P.A", Stage: "A"}, {Fqid: "P.B", Stage: "B", Roots: []string{"P.B"}, Reads: []Read{{Node: "P.A", Fields: []string{"x"}}}}},
 		Roots: []TopoRoot{{Fqid: "P.B"}},
 	}
+	fewer := Topology{Nodes: []TopoNode{{Fqid: "P.B", Stage: "B", Reads: w.Nodes[1].Reads}}}
 
 	for name, r := range map[string]Topology{
-		"node":  {Nodes: []TopoNode{{Fqid: "P.C", Stage: "C"}}},
-		"roots": {Nodes: []TopoNode{{Fqid: "P.A", Stage: "A", Roots: []string{"P.B"}}}},
-		"read":  {Nodes: []TopoNode{{Fqid: "P.B", Stage: "B", Roots: []string{"P.B"}, Reads: []Read{{Node: "P.A"}}}}},
-		"feed":  {Nodes: w.Nodes[1:], Roots: []TopoRoot{{Fqid: "P.B", Producer: "P.A"}}},
+		"node":        {Nodes: []TopoNode{{Fqid: "P.C", Stage: "C"}}},
+		"roots":       {Nodes: []TopoNode{{Fqid: "P.A", Stage: "A", Roots: []string{"P.B"}}}},
+		"read":        {Nodes: []TopoNode{{Fqid: "P.B", Stage: "B", Roots: []string{"P.B"}, Reads: []Read{{Node: "P.A"}}}}},
+		"feed":        {Nodes: w.Nodes[1:], Roots: []TopoRoot{{Fqid: "P.B", Producer: "P.A"}}},
+		"fewer roots": fewer,
 	} {
 		if err := w.Covers(r); !errors.Is(err, errUncovered) {
 			t.Errorf("%s: Covers = %v, want errUncovered", name, err)
 		}
 	}
 
-	for name, r := range map[string]Topology{
-		"a subset":    {Nodes: w.Nodes[1:], Roots: w.Roots},
-		"fewer roots": {Nodes: []TopoNode{{Fqid: "P.B", Stage: "B", Reads: w.Nodes[1].Reads}}},
-	} {
-		if err := w.Covers(r); err != nil {
-			t.Errorf("%s is not covered: %v", name, err)
-		}
+	if err := w.Covers(Topology{Nodes: w.Nodes[1:], Roots: w.Roots}); err != nil {
+		t.Errorf("a subset is not covered: %v", err)
+	}
+
+	w.Nodes[1].Collapsible = true
+
+	if err := w.Covers(fewer); err != nil {
+		t.Errorf("fewer roots of a collapsible node is not covered: %v", err)
 	}
 }
 
@@ -138,7 +162,7 @@ call TOP(off = true,)
 		t.Fatal(err)
 	}
 
-	if _, err := s.Witness([]string{dir}); err != nil {
+	if _, _, err := s.Witness([]string{dir}); err != nil {
 		t.Errorf("witness: %v", err)
 	}
 
@@ -179,7 +203,7 @@ func TestSourceIncludesIgnoreWorkingDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := src.Witness([]string{dir}); err != nil {
+	if _, _, err := src.Witness([]string{dir}); err != nil {
 		t.Errorf("witness: %v", err)
 	}
 

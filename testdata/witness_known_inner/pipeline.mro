@@ -1,0 +1,52 @@
+# #621 (gen seed 364, shrunk): per row, USE maps over ROW's outs, ROW
+# mapping over the row. Rows of different lengths, as the witness's, leave
+# ROW's fork count to its outs, so ROW fixes USE's forks; one row is a
+# source of known length, so the entry does. ROW still posts USE's forks,
+# which the project's wiring reads from it.
+stage ROW(
+    in  int x,
+    out int y,
+    src py  "stages/row",
+)
+
+stage USE(
+    in  ROW r,
+    out int z,
+    src py  "stages/use",
+)
+
+pipeline PER_ROW(
+    in  int[] row,
+    out int[] zs,
+)
+{
+    map call ROW(
+        x = split self.row,
+    )
+
+    map call USE(
+        r = split ROW,
+    )
+
+    return (
+        zs = USE.z,
+    )
+}
+
+pipeline TOP(
+    in  int[][] rows,
+    out int[][] zss,
+)
+{
+    map call PER_ROW(
+        row = split self.rows,
+    )
+
+    return (
+        zss = PER_ROW.zs,
+    )
+}
+
+call TOP(
+    rows = [[1, 2]],
+)

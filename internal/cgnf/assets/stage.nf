@@ -490,7 +490,7 @@ workflow ENTRY_ROOT {
     root
 
     main:
-    out = records.flatMap { m -> m[root] ?: [] }
+    out = records.flatMap { m -> (m[root] ?: []).collect { f -> f + [true] } }
 
     emit:
     out
@@ -533,19 +533,20 @@ workflow PUBLISHED {
 // FORK extends each instance by one of its node's roots: it joins every
 // fork of the root under its own ordinals of the root's outer roots, at
 // positions outer. A fork is [outer key, own ordinal, record or element
-// item, index token]: an entry-fed root's record from PLAN, a stage-fed
-// root's element its producer posted (ELEMENTS).
+// item, index token, whether a record]: an entry-fed root's record from
+// PLAN (ENTRY_ROOT), a stage-fed root's element its producer posted
+// (ELEMENTS), or its record from PLAN where the invocation's entry fixes
+// its forks.
 workflow FORK {
     take:
     inst
     forks
     outer
-    entryFed
     zipped
 
     main:
-    out = inst.map { k, fs, es, tk -> [k[outer], k, fs, es, tk] }.combine(forks, by: 0).map { _o, k, fs, es, tk, own, x, t ->
-        [k + [own], entryFed ? fs + [x] : fs, entryFed ? es : es + [x], zipped ? tk + [t] : tk]
+    out = inst.map { k, fs, es, tk -> [k[outer], k, fs, es, tk] }.combine(forks, by: 0).map { _o, k, fs, es, tk, own, x, t, rec ->
+        [k + [own], rec ? fs + [x] : fs, rec ? es : es + [x], zipped ? tk + [t] : tk]
     }
 
     emit:
@@ -570,7 +571,7 @@ workflow ELEMENTS {
             def name = itemName(e)
             def t = name.tokenize('@')[0].tokenize('.').collect { x -> x as int }
             def named = t.iterator()
-            [at.collect { a -> a >= 0 ? kp[a] : named.next() }, t[-1], e, keyed ? name.tokenize('@')[1] : t[-1].toString()]
+            [at.collect { a -> a >= 0 ? kp[a] : named.next() }, t[-1], e, keyed ? name.tokenize('@')[1] : t[-1].toString(), false]
         }
     }
 
@@ -628,9 +629,9 @@ workflow GATE {
     next
 
     main:
-    out = inst.combine(nodes).filter { k, _fs, _es, _tk, ns, _c -> representative(k, ns[meta.node]) == null }.map { k, fs, es, _tk, ns, c ->
+    out = inst.combine(nodes).flatMap { k, fs, es, _tk, ns, c ->
         def r = ns[meta.node]
-        [k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
+        representative(k, r) != null ? [] : [[k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]]
     }
 
     emit:
@@ -651,8 +652,7 @@ def representative(List k, List r) {
 }
 
 // ALIASES pairs each instance of a node that runs no job of its own, by its
-// key, with its representative's, whose posted items serve it (POSTED,
-// GATES).
+// key, with its representative's, whose posted items serve it (ALIASED).
 workflow ALIASES {
     take:
     inst
@@ -660,7 +660,24 @@ workflow ALIASES {
     meta
 
     main:
-    out = inst.combine(nodes).map { k, _fs, _es, _tk, ns, _c -> [representative(k, ns[meta.node]), k] }.filter { v -> v[0] != null }
+    out = inst.combine(nodes).flatMap { k, _fs, _es, _tk, ns, _c ->
+        def rep = representative(k, ns[meta.node])
+        rep == null ? [] : [[rep, k]]
+    }
+
+    emit:
+    out
+}
+
+// ALIASED is a collapsible node's posted items, by key, each instance's own
+// and, for each instance that runs no job of its own, its representative's.
+workflow ALIASED {
+    take:
+    items
+    aliases
+
+    main:
+    out = items.mix(aliases.combine(items, by: 0).map { _r, k, x -> [k, x] })
 
     emit:
     out
@@ -672,11 +689,9 @@ workflow GATES {
     take:
     posted
     skip
-    aliases
 
     main:
-    own = posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
-    out = own.mix(aliases.combine(own, by: 0).map { _r, k, gs -> [k, gs] })
+    out = posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
 
     emit:
     out
@@ -1056,19 +1071,16 @@ workflow DONE {
 // the dirs, value records and refs at positions at to at + 2 of what its
 // task posted. A dir names a file by reference where its producer wrote
 // it, which POSTED finds among the sources of the instance's posting task
-// (SOURCES), by its key. An instance that runs no job of its own takes its
-// representative's (ALIASES).
+// (SOURCES), by its key.
 workflow POSTED {
     take:
     posted
     skip
     sources
     at
-    aliases
 
     main:
-    own = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
-    all = own.mix(aliases.combine(own, by: 0).map { _r, k, items -> [k, items] })
+    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
 
     emit:
     all

@@ -40,27 +40,45 @@ No map call is pruned on an empty or null source and no call is disabled by an
 entry value, so the witness's call graph holds every stage node of any
 invocation, forked on every root it can be.
 
-An invocation can fork a node on fewer roots. When an entry value makes a
-node's inputs the same at every fork of a root, such as a flag that disables
-the only stage it reads, Martian drops that root from the node and `mrp` runs
-its job once for all of them. PLAN records those roots (`PlanNode.Collapse`).
-The driver runs the node only at ordinal 0 of each, and its posted outs, forks
-and gates serve the other instances (`ALIASES`), so the job count stays
-`mrp`'s.
-
 Where `mrp` refuses the witness, the inputs start from the literal invocation,
 and each in turn takes its witness value only while `mrp` still accepts the
 call; a panic of Martian's call-graph builder counts as a refusal.
 
+Martian builds a differently shaped call graph for some entry values, so the
+transpile also compiles *variants* of the witness and adds to its topology
+what they hold that it lacks (`Topology.withVariant`):
+
+| Variant | What it can change | Example fixture |
+|---|---|---|
+| one input `null` | a gate decides whether a map call's collection is null, which the pipeline outs then read | `witness_null_gated` |
+| one bool `true` | a flag disables the only stage a node reads, so Martian forks the node on fewer roots | `witness_flag_disables` |
+| one collection's elements `null` | a node forked on fewer roots, likewise | |
+| nested collections of one length | a merge Martian expands at its compile-time forks, which a stage reads; a root the entry fixes, not a stage | `witness_uniform_merge`, `witness_known_inner` |
+
+- **Reads** a variant adds are staged in every invocation. Across the fixtures
+  and Cell Ranger 10.1.0's pipelines they are a gate's boolean, and one
+  sub-pipeline's fixed set of outs (`merge_unforked_pipeline`).
+- **A node forked on fewer roots** (`TopoNode.Collapsible`) runs once for all
+  forks of the roots Martian drops, as `mrp` runs its job once. PLAN records
+  those roots (`PlanNode.Collapse`); the driver runs the node only at ordinal
+  0 of each, and its posted outs, forks and gates serve the other instances
+  (`ALIASES`, `ALIASED`), so the job count stays `mrp`'s.
+- **A root the entry fixes** where the witness's stage does (`TopoRoot.Entry`)
+  takes its forks from PLAN's records as well as from the stage's posted
+  elements; PLAN writes them only when the invocation's entry fixes them.
+- **A root of no fork** whatever its gates hold, such as `[] unless GATE.off`
+  (`TopoRoot.Empty`), runs no node.
+
 The transpile refuses a `.mro` whose own invocation is not within its
-witness's (`Source.CoversLiteral`), and at run time PLAN checks the real
+topology (`Source.CoversLiteral`), and at run time PLAN checks the real
 invocation the same way (`Topology.Covers`): a node, fork root or read the
-witness lacks fails before any stage starts ([Run time](runtime.md#plan)). A
-read is within the witness's when the witness's read patterns give every
-instance it reads, at the invocation's fork counts: Martian expands an entry
-collection into a literal of its width, and at one fork an alignment selects
-what a limit to ordinal 0 does. The witness's own patterns don't depend on its
-width (`mergePatterns`). Some invocations remain outside the witness (#621).
+topology lacks fails before any stage starts ([Run time](runtime.md#plan)). A
+read is within the topology's when its read patterns give every instance it
+reads, at the invocation's fork counts: Martian expands an entry collection
+into a literal of its width, and at one fork an alignment selects what a
+limit to ordinal 0 does. The witness's own patterns don't depend on its width
+(`mergePatterns`). Across 1,987 generated programs with 20 random launches
+each, every launch Martian compiles is within its project's topology.
 
 ## The topology
 
