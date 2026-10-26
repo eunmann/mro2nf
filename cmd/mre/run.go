@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -27,7 +28,6 @@ const (
 	joinRecord     = "join.json"
 	resourcesTable = "resources.tsv"
 	joinRow        = "join"
-	recordDirPerm  = 0o750
 	// stageNameFile names the stage a job ran, in a file of mre's own beside
 	// the job's metadata. _jobinfo's "name" carries only the top-level call,
 	// and the Nextflow task graph is not a stable identity, so the mrp ABI
@@ -235,7 +235,7 @@ func writeResources(path string, rt job.Runtime, st job.Stage, defs *core.StageD
 		return err
 	}
 
-	if err := os.WriteFile(path, []byte(b.String()), filePerm); err != nil {
+	if err := os.WriteFile(path, []byte(b.String()), fileio.FilePerm); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 
@@ -246,11 +246,11 @@ func writeResources(path string, rt job.Runtime, st job.Stage, defs *core.StageD
 // dir sub before the job runs, so a failed job is attributed too.
 func (f *runFlags) stamp(in job.Instance, sub string) error {
 	meta := filepath.Join(f.rt.Work, sub)
-	if err := os.MkdirAll(meta, job.DirPerm); err != nil {
+	if err := os.MkdirAll(meta, fileio.DirPerm); err != nil {
 		return fmt.Errorf("stamp %s: %w", sub, err)
 	}
 
-	if err := os.WriteFile(filepath.Join(meta, stageNameFile), []byte(in.Stage.Callable), filePerm); err != nil {
+	if err := os.WriteFile(filepath.Join(meta, stageNameFile), []byte(in.Stage.Callable), fileio.FilePerm); err != nil {
 		return fmt.Errorf("stamp %s: %w", sub, err)
 	}
 
@@ -305,7 +305,7 @@ func (w itemWriter) write(dir string, payload map[string]any, params []*syntax.S
 // writeRefs writes the reference records refs to the file path, which the
 // driver resolves (-out-refs).
 func writeRefs(path string, refs []string) error {
-	if err := os.WriteFile(path, []byte(shim.JoinRefs(refs)), filePerm); err != nil {
+	if err := os.WriteFile(path, []byte(shim.JoinRefs(refs)), fileio.FilePerm); err != nil {
 		return fmt.Errorf("write -out-refs %q: %w", path, err)
 	}
 
@@ -474,22 +474,26 @@ func writeChunksDir(dir string, defs *core.StageDefs, params []*syntax.StructMem
 			return nil, err
 		}
 
-		if err := writeRecordFile(filepath.Join(cd, chunkRecord), chunkJSON{Index: i, Count: len(defs.ChunkDefs), Resources: d.Resources}); err != nil {
-			return nil, err
+		if err := fileio.WriteJSON(filepath.Join(cd, chunkRecord), chunkJSON{Index: i, Count: len(defs.ChunkDefs), Resources: d.Resources}); err != nil {
+			return nil, fmt.Errorf("chunk record: %w", err)
 		}
 
 		refs = append(refs, named...)
 	}
 
-	return refs, writeRecordFile(filepath.Join(dir, joinRecord), defs.JoinDef)
+	if err := fileio.WriteJSON(filepath.Join(dir, joinRecord), defs.JoinDef); err != nil {
+		return nil, fmt.Errorf("join record: %w", err)
+	}
+
+	return refs, nil
 }
 
 // readChunk reads a chunk the split wrote, the files it names by reference
 // among refs.
 func readChunk(dir string, refs shim.Refs) (job.Chunk, error) {
 	var rec chunkJSON
-	if err := readRecordFile(filepath.Join(dir, chunkRecord), &rec); err != nil {
-		return job.Chunk{}, err
+	if err := fileio.ReadJSON(filepath.Join(dir, chunkRecord), &rec); err != nil {
+		return job.Chunk{}, fmt.Errorf("chunk record: %w", err)
 	}
 
 	args, err := readArgsMap(dir, refs)
@@ -506,8 +510,8 @@ func readChunk(dir string, refs shim.Refs) (job.Chunk, error) {
 // each chunk's record counts them.
 func readChunksDir(dir string, refs shim.Refs) (*core.StageDefs, []string, error) {
 	defs := &core.StageDefs{}
-	if err := readRecordFile(filepath.Join(dir, joinRecord), &defs.JoinDef); err != nil {
-		return nil, nil, err
+	if err := fileio.ReadJSON(filepath.Join(dir, joinRecord), &defs.JoinDef); err != nil {
+		return nil, nil, fmt.Errorf("join record: %w", err)
 	}
 
 	names, err := chunkNames(dir)
@@ -608,34 +612,4 @@ func writeObjectBundle(dir string, m core.LazyArgumentMap, params []*syntax.Stru
 	}
 
 	return w.write(dir, payload, params)
-}
-
-func writeRecordFile(path string, v any) error {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), recordDirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-
-	if err := os.WriteFile(path, raw, filePerm); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-
-	return nil
-}
-
-func readRecordFile(path string, v any) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	if err := json.Unmarshal(raw, v); err != nil {
-		return fmt.Errorf("decode %s: %w", path, err)
-	}
-
-	return nil
 }

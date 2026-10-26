@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/job"
 	vendormartian "github.com/eunmann/mro2nf/vendor-martian"
 	"github.com/google/go-cmp/cmp"
@@ -201,11 +202,11 @@ func TestToolsKeepsWhatTheTaskNames(t *testing.T) {
 func TestExtractAdaptersReplacesAStaleCopy(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := os.MkdirAll(filepath.Join(dir, "python"), job.DirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "python"), fileio.DirPerm); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "python", "martian.py"), []byte("stale\n"), filePerm); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "python", "martian.py"), []byte("stale\n"), fileio.FilePerm); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,7 +222,7 @@ func TestExtractAdaptersReplacesAStaleCopy(t *testing.T) {
 // a job without them.
 func TestToolsFailsWhereAdaptersCannotBeWritten(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(file, nil, filePerm); err != nil {
+	if err := os.WriteFile(file, nil, fileio.FilePerm); err != nil {
 		t.Fatal(err)
 	}
 

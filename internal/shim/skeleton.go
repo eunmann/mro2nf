@@ -8,6 +8,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+
+	"github.com/eunmann/mro2nf/internal/fileio"
 )
 
 // SkeletonFile names the file in a bundle dir that holds the bundle's
@@ -136,7 +138,7 @@ func (s shapeNode) dangling(src string) error {
 func (s shapeNode) file(string, fs.FileInfo) error { return writeRaw(s.dst, nil) }
 
 func (s shapeNode) dir() error {
-	if err := os.MkdirAll(s.dst, dirPerm); err != nil {
+	if err := os.MkdirAll(s.dst, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create %s: %w", s.dst, err)
 	}
 
@@ -165,7 +167,7 @@ func ExpandSkeleton(file, dir string) error {
 		return fmt.Errorf("decode skeleton %s: %w", file, err)
 	}
 
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := os.MkdirAll(dir, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
@@ -186,7 +188,7 @@ func expandEntry(dir string, e skeletonEntry) error {
 	at := filepath.Join(dir, filepath.FromSlash(e.Path))
 
 	if e.Dir {
-		if err := os.MkdirAll(at, dirPerm); err != nil {
+		if err := os.MkdirAll(at, fileio.DirPerm); err != nil {
 			return fmt.Errorf("create %s: %w", at, err)
 		}
 

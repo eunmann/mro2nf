@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
@@ -97,7 +98,7 @@ func (r *refRun) stage(items []string) []string {
 	r.t.Helper()
 
 	for _, d := range []string{"in", "refs"} {
-		if err := os.MkdirAll(d, dirPerm); err != nil {
+		if err := os.MkdirAll(d, fileio.DirPerm); err != nil {
 			r.t.Fatal(err)
 		}
 	}
@@ -118,7 +119,7 @@ func (r *refRun) stage(items []string) []string {
 
 	for i, o := range refs {
 		at := filepath.Join("refs", strconv.Itoa(i+1), "f")
-		if err := os.MkdirAll(at, dirPerm); err != nil {
+		if err := os.MkdirAll(at, fileio.DirPerm); err != nil {
 			r.t.Fatal(err)
 		}
 
@@ -278,7 +279,7 @@ func (r *refRun) publish(items []string) map[string]string {
 	r.t.Helper()
 
 	task := filepath.Join(r.root, "outs-task")
-	if err := os.MkdirAll(task, dirPerm); err != nil {
+	if err := os.MkdirAll(task, fileio.DirPerm); err != nil {
 		r.t.Fatal(err)
 	}
 

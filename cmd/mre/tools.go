@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/job"
 	vendormartian "github.com/eunmann/mro2nf/vendor-martian"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -18,7 +19,6 @@ const (
 	adaptersDir = "_mre_adapters"
 	// shellScript is the adapter mrjob executes, so its copy is executable.
 	shellScript = "martian_shell.py"
-	execPerm    = 0o755
 )
 
 // tools completes the runtime's tools a task did not name: the mrjob
@@ -62,7 +62,7 @@ func extractAdapters(dir string) error {
 
 		dst := filepath.Join(dir, filepath.FromSlash(name))
 		if d.IsDir() {
-			return os.MkdirAll(dst, job.DirPerm)
+			return os.MkdirAll(dst, fileio.DirPerm)
 		}
 
 		raw, err := vendormartian.Adapters.ReadFile(name)
@@ -70,9 +70,9 @@ func extractAdapters(dir string) error {
 			return fmt.Errorf("read %s: %w", name, err)
 		}
 
-		perm := os.FileMode(filePerm)
+		perm := os.FileMode(fileio.FilePerm)
 		if path.Base(name) == shellScript {
-			perm = execPerm
+			perm = fileio.ExecPerm
 		}
 
 		return os.WriteFile(dst, raw, perm)

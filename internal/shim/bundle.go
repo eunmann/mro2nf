@@ -15,13 +15,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
-)
-
-const (
-	filePerm = 0o644
-	dirPerm  = 0o755
 )
 
 // errDestExists is returned by CopyTree when the destination already exists, to
@@ -335,7 +331,7 @@ func LinkLeaves(dir string, payload map[string]any, params []*syntax.StructMembe
 
 // writePayload writes a decoded payload as dir/data.json.
 func writePayload(dir string, payload map[string]any) error {
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := os.MkdirAll(dir, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create bundle %s: %w", dir, err)
 	}
 
@@ -348,7 +344,7 @@ func writePayload(dir string, payload map[string]any) error {
 }
 
 func writeRaw(path string, data []byte) error {
-	if err := os.WriteFile(path, data, filePerm); err != nil {
+	if err := os.WriteFile(path, data, fileio.FilePerm); err != nil {
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 
@@ -538,7 +534,7 @@ func (m leafMarker) stage(src, abs, rel string, origin Origin) error {
 		return linkLeaf(abs, dst, origin)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), fileio.DirPerm); err != nil {
 		return fmt.Errorf("create files dir: %w", err)
 	}
 
@@ -566,14 +562,14 @@ func linkLeaf(abs, dst string, origin Origin) error {
 	}
 
 	if recorded {
-		if err := os.MkdirAll(filepath.Dir(ordinal), dirPerm); err != nil {
+		if err := os.MkdirAll(filepath.Dir(ordinal), fileio.DirPerm); err != nil {
 			return fmt.Errorf("create files dir: %w", err)
 		}
 
 		return linkAt(filepath.Dir(abs), ordinal)
 	}
 
-	if err := os.MkdirAll(ordinal, dirPerm); err != nil {
+	if err := os.MkdirAll(ordinal, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create files dir: %w", err)
 	}
 
@@ -751,7 +747,7 @@ func (c copyNode) file(src string, info fs.FileInfo) error {
 // restores after populating: a read-only source directory (e.g. 0555) must
 // still admit its children being written into the copy.
 func (c copyNode) dir() error {
-	if err := os.MkdirAll(c.dst, dirPerm); err != nil {
+	if err := os.MkdirAll(c.dst, fileio.DirPerm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", c.dst, err)
 	}
 
@@ -774,7 +770,7 @@ func (c copyNode) leave(info fs.FileInfo, empty bool) error {
 	// Restoring the source mode is best-effort: the exact directory permission is
 	// a nicety, not a contract (publish names every leaf and reads by path), and a
 	// filesystem that rejects the chmod would otherwise fail a copy that the prior
-	// MkdirAll-with-source-mode tolerated. A more-permissive dirPerm is safe.
+	// MkdirAll-with-source-mode tolerated. A more-permissive fileio.DirPerm is safe.
 	_ = os.Chmod(c.dst, info.Mode().Perm())
 
 	return nil
