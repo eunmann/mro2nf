@@ -81,6 +81,12 @@ func benchLanes() []benchLane {
 		// each B task stages that one file.
 		{key: "mapchain_w4", dir: "mapchain", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPCHAIN_PROBE", producers: 4 * 4, mrpJobs: 2 + 8*4, flatStaging: true},
 		{key: "mapchain_w16", dir: "mapchain", mro: "pipeline_w16.mro", probe: "MRE_BENCH_MAPCHAIN_PROBE", producers: 4 * 16, mrpJobs: 2 + 8*16, flatStaging: true},
+		// MKXS, then in each of 2 lanes an A per fork writing one file and
+		// a B per fork reading the A file at its own index and every A
+		// file (#622): each B task stages all N A files, as each mrp job
+		// reads them, so its staging grows with the width.
+		{key: "mapgather_w4", dir: "mapgather", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPGATHER_PROBE", producers: 2 * 4, mrpJobs: 1 + 4*4},
+		{key: "mapgather_w16", dir: "mapgather", mro: "pipeline_w16.mro", probe: "MRE_BENCH_MAPGATHER_PROBE", producers: 2 * 16, mrpJobs: 1 + 4*16},
 		// MKREF, then per sample ALIGN's split, 2 chunks and join, whose
 		// chunks and join read MKREF's ref.
 		{key: "splitbroadcast_w4", dir: "splitbroadcast", mro: "pipeline_w4.mro", probe: "MRE_BENCH_SPLITBROADCAST_PROBE", producers: 1, mrpJobs: 1 + 4*4, flatStaging: true},

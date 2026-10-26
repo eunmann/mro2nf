@@ -8,11 +8,19 @@ a transpiled Martian→Nextflow pipeline live, for **both** cloud targets:
 | S3 bucket (work dir + outputs) | `awsbatch` + `healthomics` |
 | ECR repo `mro2nf-runtime` (the runtime image and the pipeline images built FROM it) | both |
 | VPC (public subnets, S3 gateway endpoint, no NAT) | `awsbatch` |
-| Batch compute environment + job queue + instance role, its instances mounting the input buckets at `/mnt/s3` | `awsbatch` |
+| Batch compute environment + job queue + instance and job roles, its instances mounting the input buckets at `/mnt/s3` | `awsbatch` |
 | HealthOmics service role + ECR pull policy | `healthomics` |
 
 It's an **example**, not a hardened deployment (public subnets, spot instances,
 `DESTROY` removal policies for easy teardown). `cdk destroy` removes everything.
+
+It does not leave security defaults to the account: the instances' root
+volumes are encrypted with the account's default EBS key and the bucket with
+S3-managed keys, the bucket blocks public access and refuses requests without
+TLS, HealthOmics may assume its role and pull from the repository only for
+this account's runs, and the role writes logs only to HealthOmics' log group,
+`/aws/omics/WorkflowLog`. `npm test` asserts each of these on the synthesized
+template.
 
 ## Cost
 
@@ -74,14 +82,15 @@ npx cdk bootstrap          # once per account/region
 npx cdk deploy -c mountBuckets=<input-bucket>,<reference-bucket>   # prints the outputs below
 ```
 
-Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleArn`.
+Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`,
+`BatchJobRoleArn`, `OmicsRoleArn`.
 
 `mountBuckets` names the buckets holding the pipeline's inputs, comma-separated;
 the work bucket is always mounted, so `-c mountBuckets=...` can be left out when
 the inputs live there. A run reads the inputs of a mounted bucket in place,
 sparing their downloads, and a stage that records an input's path for
-another task to open needs it. The instance role may read only the mounted
-buckets, so every bucket holding an input belongs in `mountBuckets`: a run
+another task to open needs it. The instance and job roles may read only the
+mounted buckets, so every bucket holding an input belongs in `mountBuckets`: a run
 would stage an input of any other bucket and fail to download it. Each Batch instance installs
 [Mountpoint for S3](https://github.com/awslabs/mountpoint-s3) at boot, the
 release `MOUNTPOINT_VERSION` in `lib/stack.ts` names, checked against the
@@ -119,11 +128,12 @@ EOF
 docker build --platform linux/amd64 -t <EcrRepoUri>:split_test -f split_test.Dockerfile testdata/split_test
 docker push <EcrRepoUri>:split_test
 
-# 3. run; a site config names the queue and region
+# 3. run; a site config names the queue, the region and the tasks' role
 cd out
 cat > batch.config <<'EOF'
 process.queue = '<BatchJobQueue>'
 aws.region = '<Region>'
+aws.batch.jobRole = '<BatchJobRoleArn>'
 EOF
 nextflow run main.nf -profile awsbatch -c batch.config \
     --mro2nf_image <EcrRepoUri>:split_test \
@@ -132,14 +142,20 @@ nextflow run main.nf -profile awsbatch -c batch.config \
 ```
 
 Keep `-output-dir` on S3: the default `results` publishes to the head node's
-working dir, and the work dir expires after 14 days. Pass entry files as
+working dir, and the work dir expires after 14 days. The head node publishes
+the outputs with your credentials; every task's container gets the job role's,
+which may read the work bucket and the mounted buckets and write only below
+`work/`, never delete. Keep `-work-dir` at `s3://<WorkBucketName>/work`: a
+task fails to upload its files to any other work dir. A run whose config names
+no job role gives its containers the instance role's credentials, which may
+also write and delete anywhere in the work bucket, `results/` included. Pass entry files as
 `s3://` URIs (a `-params-file` or `--<input>`); the `awsbatch` profile refuses
 a head-node path. The profile reads an input of a mounted bucket in place
 through the mount: a stage receives `s3://<bucket>/<key>` as
 `/mnt/s3/<bucket>/<key>`, the same path in every task, as `mrp` passes the
 path it was given, and no task downloads it. An input of a bucket the
 instances do not mount, neither the work bucket nor one in `mountBuckets`, is
-one this stack's instance role may not read: the run stages it, as on every
+one this stack's roles may not read: the run stages it, as on every
 other profile, and its download fails with AccessDenied. Every input bucket
 belongs in `mountBuckets`. The mount is read-only.
 

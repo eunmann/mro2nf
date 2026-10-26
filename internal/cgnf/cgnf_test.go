@@ -1021,6 +1021,30 @@ func TestEmitReadsWhatEachInstanceReads(t *testing.T) {
 	}
 }
 
+// TestEmitGathersAReadAlsoAligned (#622): a read of an upstream both at the
+// reader's own fork and whole (bench/mapgather: B_LIT and B_RUN read A_LIT
+// and A_RUN as f = split A.f and all = A.f) is the one GATHER of every
+// upstream instance, whose whole read covers the aligned one, never NEEDS,
+// whose group per reader instance would hold each upstream instance once
+// per pattern.
+func TestEmitGathersAReadAlsoAligned(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("..", "..", "bench", "mapgather"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := t.TempDir()
+	if err := Emit(filepath.Join(dir, "pipeline_w4.mro"), Options{OutDir: out, MroPaths: []string{dir}, Version: "v1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+
+	main := wiringNF(readTree(t, out))
+
+	if strings.Contains(main, "NEEDS(") || strings.Count(main, "GATHER(") != 2 {
+		t.Errorf("mapgather's main.nf reads its upstreams other than through one GATHER each:\n%s", main)
+	}
+}
+
 // TestEmitReadsOutsAsTheyCome (#559): a node's outs are keyed by its whole
 // key, which a reader sharing every root of it has at its own positions,
 // so the reader combines the node's outs channel as it comes, and its

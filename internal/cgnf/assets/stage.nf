@@ -358,9 +358,11 @@ def bundleLocations(List ss) {
 }
 
 // refBundles are the bundles holding the files items name by reference
-// that no item holds (refsOf), each once.
+// that no item holds (refsOf), each once, in the order they come: a set
+// keeps them in time linear in them, where List.unique compares each with
+// every one it kept.
 def refBundles(List items) {
-    return refsOf(items).collect { r -> r.parent.parent }.unique()
+    return new LinkedHashSet(refsOf(items).collect { r -> r.parent.parent }).toList()
 }
 
 // published is the published tree the manifest in OUTS's publish dir p
@@ -874,11 +876,27 @@ workflow NEEDS {
         (0..<patterns.size()).collect { x -> [[x] + ku[patterns[x][2]], [ku, es]] }
     }
     out = seeds.mix(picks.combine(ups, by: 0).map { _q, k, u -> [k, u] }).groupTuple().map { k, us ->
-        [k, ordered(us.findAll { u -> u != null }.unique { u -> u[0] }.collectMany { u -> u[1].collect { e -> [u[0], e] } })]
+        [k, ordered(readOnce(us))]
     }
 
     emit:
     out
+}
+
+// readOnce is the items of the upstream instances an instance's group us
+// holds, [key, items] each or a null seed, each paired with its instance's
+// key. Two patterns can give it one instance, which a map keyed by the
+// instance's key keeps once, the first, in time linear in the group, where
+// List.unique compares each with every one it kept: a group one pattern
+// gives every upstream instance and another its own holds N + 1.
+def readOnce(List us) {
+    def first = [:]
+    us.each { u ->
+        if (u != null) {
+            first.putIfAbsent(u[0], u[1])
+        }
+    }
+    return first.collectMany { ku, es -> es.collect { e -> [ku, e] } }
 }
 
 // needed is, of each pattern whose limits instance key k meets, the key it
