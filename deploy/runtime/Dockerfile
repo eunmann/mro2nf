@@ -32,11 +32,16 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 # bash launcher + ps (Nextflow task metrics) + coreutils + aws CLI (S3 staging on
 # AWS Batch). No ENTRYPOINT: the backend invokes the generated command directly.
+# Versions are not pinned: Debian drops a superseded version from its mirrors
+# at each point and security release, so a pin fails the build, and
+# snapshot.debian.org pins would freeze the security fixes. The upgrade takes
+# the fixes released since the base image was built. A release pushes the
+# image it built, by digest.
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends procps coreutils awscli \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/mre /out/mrjob /opt/mro2nf/
 COPY vendor-martian/python /opt/mro2nf/adapters/python
 COPY LICENSE THIRD_PARTY_NOTICES /opt/mro2nf/
-RUN chmod +x /opt/mro2nf/mre /opt/mro2nf/mrjob
 ENV PATH="/opt/mro2nf:${PATH}"

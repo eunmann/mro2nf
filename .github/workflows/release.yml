@@ -195,6 +195,37 @@ jobs:
           path: ${{ steps.archive.outputs.file }}
           if-no-files-found: error
 
+  # Runs each archive's binaries on a runner of its platform, which the build
+  # job's cross-compile cannot.
+  smoke:
+    name: Smoke-test the ${{ matrix.goos }}-${{ matrix.goarch }} archive
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, runner: ubuntu-latest }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04-arm }
+          - { goos: darwin, goarch: amd64, runner: macos-15-intel }
+          - { goos: darwin, goarch: arm64, runner: macos-latest }
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
+      - name: Run the archive's binaries
+        env:
+          PLATFORM: ${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          dir="mro2nf-${VERSION}-${PLATFORM}"
+          tar -xzf "$dir.tar.gz"
+          check() { [ "$1" = "$2" ] || { echo "::error::$PLATFORM archive: got '$1', want '$2'"; exit 1; }; }
+          check "$("$dir/mro2nf" -version)" "mro2nf $VERSION"
+          check "$("$dir/mre" version)" "mre $VERSION"
+          [ -x "$dir/mrjob" ] || { echo "::error::$PLATFORM archive: $dir/mrjob is not executable"; exit 1; }
+
   # Build the runtime image (mre, mrjob and Martian's adapters at /opt/mro2nf),
   # the image a pipeline's own image builds FROM, which every task of a
   # container profile runs in. Multi-arch (amd64 + arm64). The build writes an
@@ -239,6 +270,42 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ inputs.version }}
+          sbom: true
+          provenance: mode=max
+      # Each platform of the archive publish pushes, through a docker archive
+      # that docker load takes: skopeo 1.13, Ubuntu 24.04's, fails writing to
+      # a Docker 29 daemon directly.
+      - name: Load each platform of the image
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            skopeo copy --override-os linux --override-arch "$arch" \
+              "oci-archive:$RUNNER_TEMP/runtime-image.tar" "docker-archive:$RUNNER_TEMP/smoke-$arch.tar:mro2nf-runtime:smoke-$arch"
+            docker load -i "$RUNNER_TEMP/smoke-$arch.tar"
+          done
+      # arm64 runs under the QEMU set up above.
+      - name: Smoke-test each platform of the image
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            got=$(docker run --rm --platform "linux/$arch" "mro2nf-runtime:smoke-$arch" mre version)
+            [ "$got" = "mre $VERSION" ] || { echo "::error::linux/$arch image: mre version printed '$got', want 'mre $VERSION'"; exit 1; }
+            docker run --rm --platform "linux/$arch" "mro2nf-runtime:smoke-$arch" sh -c 'test -x /opt/mro2nf/mrjob && aws --version && ps --version'
+          done
+      # Fixable High or Critical findings fail the release; the rest are
+      # listed in the log.
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: mro2nf-runtime:smoke-amd64
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: mro2nf-runtime:smoke-arm64
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
       # The layers are compressed already.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -247,14 +314,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  # The only job that writes. It runs after every build succeeded, and never
+  # The only job that writes. It runs after every build and smoke test succeeded, and never
   # in a dry run: it tags, then pushes the image, then creates the release. A
   # single job publishes because 4 build legs racing to create the same
   # release is a known flakiness source (duplicate-release 409s in
   # action-gh-release).
   publish:
     name: Tag and publish
-    needs: [gate, build, image]
+    needs: [gate, build, smoke, image]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     permissions:

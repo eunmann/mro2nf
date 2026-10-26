@@ -1,7 +1,8 @@
 name: PR Validation
 
 # Docs-only changes (markdown, docs/, the agent skills, LICENSE) can't affect
-# anything CI measures, so they skip the heavy jobs. This workflow is the ONLY
+# the code CI measures, so they skip the heavy jobs and run only the tests of
+# those files. This workflow is the ONLY
 # source of the seven required contexts (#280): a second workflow posting the
 # same names lets branch protection accept its success before the real job
 # reports. TestRequiredContexts* guards that.
@@ -29,7 +30,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Every required job carries the same gate:
+# Every required job but Unit tests carries the same gate:
 #   needs: changes
 #   if: ${{ <status> && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
 # It skips only on a successful docs-only verdict, and GitHub counts a job
@@ -37,7 +38,8 @@ concurrency:
 # (`!cancelled()`, or `always()` for the e2e aggregate) replaces the implicit
 # success(): without it a FAILED `changes` job would skip every required job,
 # and those skips would pass branch protection. With it, a failed `changes`
-# runs full validation.
+# runs full validation. Unit tests runs on every PR and gates its code steps
+# on the same verdict.
 jobs:
   changes:
     name: Detect code changes
@@ -83,10 +85,8 @@ jobs:
           cache: true
       - name: Check go mod tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
-      - name: Check for vulnerabilities
-        # Pinned so a new govulncheck release (or one needing a newer toolchain)
-        # cannot change CI behavior without a repo change.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0 && govulncheck ./...
+      - name: Check the source and the binaries for vulnerabilities
+        run: make vulncheck
       # golangci-lint runs govet, so there is no separate `go vet` step.
       # --build-tags e2e pulls the tag-gated test/e2e harness into the lint
       # set (the tag is additive; nothing else carries an e2e constraint).
@@ -111,13 +111,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build all packages
-        run: go build ./...
+      - name: Build every package and test for each release platform
+        run: make cross
 
+  # The one required job that runs on a docs-only PR: these packages test the
+  # files such a PR changes (doc links, the generated divergences table, the
+  # agent hooks), so the gate moves from the job to its other steps.
   test:
     name: Unit tests
     needs: changes
-    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -126,9 +129,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Run the tests of docs and agent files
+        run: go test ./test/docs ./test/divergence ./test/e2e
       - name: Run tests (race detector)
+        if: ${{ !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
         run: go test -race ./...
       - name: Coverage gate
+        if: ${{ !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
         run: make cover
 
   # Single source of truth for the E2E shard fan-out: the shard list is defined

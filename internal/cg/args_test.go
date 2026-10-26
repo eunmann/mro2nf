@@ -107,7 +107,7 @@ func wantPayload(t *testing.T, i int, args core.LazyArgumentMap, leaf string) {
 	}
 }
 
-func linkCount(t *testing.T, path string) uint64 {
+func linkCount(t *testing.T, path string) int {
 	t.Helper()
 
 	info, err := os.Stat(path)
@@ -120,7 +120,7 @@ func linkCount(t *testing.T, path string) uint64 {
 		t.Skip("no link count on this platform")
 	}
 
-	return st.Nlink
+	return int(st.Nlink)
 }
 
 // regularFiles are the names of the regular files below dir, its links not

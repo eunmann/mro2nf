@@ -343,6 +343,34 @@ func TestReleaseArchiveLayout(t *testing.T) {
 	}
 }
 
+var makeReleasePlatforms = regexp.MustCompile(`(?m)^RELEASE_PLATFORMS := (.+)$`)
+
+// TestCrossCompilesReleasePlatforms holds make cross to the platforms the
+// release ships archives for, and PR Validation's Build job to running it:
+// no test runs on darwin or linux/arm64, so only the cross-compile catches a
+// test that compiles on the runner's platform alone.
+func TestCrossCompilesReleasePlatforms(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := makeReleasePlatforms.FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("Makefile sets no RELEASE_PLATFORMS")
+	}
+
+	got := strings.Fields(strings.ReplaceAll(string(m[1]), "/", "-"))
+	if diff := cmp.Diff(releasePlatforms(t), got); diff != "" {
+		t.Errorf("Makefile RELEASE_PLATFORMS != %s build platforms (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	steps := readWorkflow(t, gateWorkflow).get("jobs").get("build").get("steps").items
+	if !slices.ContainsFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("run")) == "make cross" }) {
+		t.Errorf("%s build job never runs make cross", gateWorkflow)
+	}
+}
+
 // TestReleaseArchiveReproducible packs the same commit in two checkouts
 // whose files differ in mtime: the archives are byte-identical.
 func TestReleaseArchiveReproducible(t *testing.T) {
@@ -792,9 +820,10 @@ type releaseJob struct {
 }
 
 // TestReleasePublishesAfterBuilds pins the job graph: the gate, then the
-// archive and image builds of the commit it resolved, then one publish job
-// that alone writes, needs every build and is skipped in a dry run. A failed
-// build or a dry run therefore tags, pushes and releases nothing.
+// archive and image builds of the commit it resolved and the archives' smoke
+// tests, then one publish job that alone writes, needs every build and smoke
+// test and is skipped in a dry run. A failed build or smoke test or a dry
+// run therefore tags, pushes and releases nothing.
 func TestReleasePublishesAfterBuilds(t *testing.T) {
 	wf := readWorkflow(t, releaseWorkflow)
 	if got := scalarOf(wf.get("permissions")); got != "{}" {
@@ -823,8 +852,9 @@ func TestReleasePublishesAfterBuilds(t *testing.T) {
 	want := map[string]releaseJob{
 		"gate":    {},
 		"build":   {Needs: "gate"},
+		"smoke":   {Needs: "build"},
 		"image":   {Needs: "gate"},
-		"publish": {Needs: "gate,build,image", If: "${{ !inputs.dry_run }}", Writes: []string{"contents", "packages", "id-token", "attestations"}},
+		"publish": {Needs: "gate,build,smoke,image", If: "${{ !inputs.dry_run }}", Writes: []string{"contents", "packages", "id-token", "attestations"}},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("%s jobs (-want +got):\n%s", releaseWorkflow, diff)
@@ -845,7 +875,7 @@ func TestReleasePublishesAfterBuilds(t *testing.T) {
 var releasePublishing = map[string]func(*yamlNode) bool{
 	"tag":      stepRuns("git tag"),
 	"git push": stepRuns("git push"),
-	"skopeo":   stepRuns("skopeo copy"),
+	"skopeo":   func(s *yamlNode) bool { return stepRuns("skopeo copy")(s) && stepRuns("docker://")(s) },
 	"login":    stepUses("docker/login-action"),
 	"attest":   stepUses("actions/attest-build-provenance"),
 	"release":  stepUses("softprops/action-gh-release"),
@@ -1098,6 +1128,231 @@ func TestReleaseImagePush(t *testing.T) {
 			t.Errorf("prerelease %s: pushed tags (-want +got):\n%s", prerelease, diff)
 		}
 	}
+}
+
+var smokeMatrixEntry = regexp.MustCompile(`^\{ goos: (\w+), goarch: (\w+), runner: ([\w.-]+) \}$`)
+
+// smokeRunners are the hosted runners of each release platform.
+var smokeRunners = map[string]string{
+	"linux-amd64":  "ubuntu-latest",
+	"linux-arm64":  "ubuntu-24.04-arm",
+	"darwin-amd64": "macos-15-intel",
+	"darwin-arm64": "macos-latest",
+}
+
+// TestReleaseSmokeTestsEveryArchive requires a smoke test of each archive on
+// a runner of its platform.
+func TestReleaseSmokeTestsEveryArchive(t *testing.T) {
+	job := readWorkflow(t, releaseWorkflow).get("jobs").get("smoke")
+	if got := scalarOf(job.get("runs-on")); got != "${{ matrix.runner }}" {
+		t.Errorf("%s smoke job runs on %q, want its matrix runner", releaseWorkflow, got)
+	}
+
+	got := map[string]string{}
+
+	for _, it := range job.get("strategy").get("matrix").get("include").items {
+		m := smokeMatrixEntry.FindStringSubmatch(it.scalar)
+		if m == nil {
+			t.Fatalf("%s smoke matrix entry %q is not { goos: <os>, goarch: <arch>, runner: <label> }", releaseWorkflow, it.scalar)
+		}
+
+		got[m[1]+"-"+m[2]] = m[3]
+	}
+
+	want := map[string]string{}
+	for _, p := range releasePlatforms(t) {
+		want[p] = smokeRunners[p]
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s smoke platforms and runners (-want +got):\n%s", releaseWorkflow, diff)
+	}
+}
+
+// TestReleaseSmokeTestStep runs the archive smoke step on stand-in binaries
+// in the archive layout: it passes when mro2nf and mre print the version and
+// mrjob is executable, and fails on a wrong version or a missing mrjob.
+func TestReleaseSmokeTestStep(t *testing.T) {
+	requireTools(t, "bash", "tar", "gzip")
+
+	script := scalarOf(releaseStep(t, "smoke", stepRuns("tar -xzf")).get("run"))
+
+	cases := []struct {
+		name, version string
+		mrjob, ok     bool
+	}{
+		{"good", releaseTag, true, true},
+		{"wrong_version", "v0.0.0", true, false},
+		{"no_mrjob", releaseTag, false, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := smokeArchive(t, tc.version, tc.mrjob)
+
+			log, _, err := execReleaseStep(t, script, dir, "VERSION="+releaseTag, "PLATFORM=linux-amd64")
+			if (err == nil) != tc.ok {
+				t.Errorf("smoke step err %v, want ok %v\n%s", err, tc.ok, log)
+			}
+		})
+	}
+}
+
+// smokeArchive writes the linux-amd64 archive of releaseTag in a new dir,
+// its mro2nf and mre stand-ins printing version, and returns the dir.
+func smokeArchive(t *testing.T, version string, mrjob bool) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	top := "mro2nf-" + releaseTag + "-linux-amd64"
+
+	bins := map[string]string{"mro2nf": "mro2nf " + version, "mre": "mre " + version}
+	if mrjob {
+		bins["mrjob"] = ""
+	}
+
+	if err := os.Mkdir(filepath.Join(dir, top), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, out := range bins {
+		if err := os.WriteFile(filepath.Join(dir, top, name), []byte("#!/bin/sh\necho '"+out+"'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if out, err := exec.Command("tar", "-C", dir, "-czf", filepath.Join(dir, top+".tar.gz"), top).CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+
+	if err := os.RemoveAll(filepath.Join(dir, top)); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
+}
+
+// TestReleaseImageSmokeTest runs the image job's smoke step with a stand-in
+// docker whose images print mre's version: it passes on the release's
+// version and fails on another.
+func TestReleaseImageSmokeTest(t *testing.T) {
+	requireTools(t, "bash")
+
+	script := scalarOf(releaseStep(t, "image", stepRuns("mre version")).get("run"))
+
+	for version, ok := range map[string]bool{releaseTag: true, "v0.0.0": false} {
+		bin := t.TempDir()
+		fake := "#!/bin/bash\ncase \"$*\" in *' mre version') echo 'mre " + version + "' ;; esac\n"
+
+		if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		log, _, err := execReleaseStep(t, script, t.TempDir(), "PATH="+bin+":"+os.Getenv("PATH"), "VERSION="+releaseTag)
+		if (err == nil) != ok {
+			t.Errorf("image printing %s: smoke step err %v, want ok %v\n%s", version, err, ok, log)
+		}
+	}
+}
+
+// scanPolicy is the Grype gate of the release and nightly image scans:
+// fail on a High or Critical finding that has a fix.
+var scanPolicy = map[string]string{"severity-cutoff": "high", "only-fixed": "true"}
+
+// TestReleaseImageAttestsAndScans pins the image build's SBOM and
+// provenance attestations, and runs the step that loads each built
+// platform from the archive publish pushes, with stand-in skopeo and
+// docker: every platform loads under the tag a scan step scans with
+// scanPolicy, the same gate as the nightly scan.
+func TestReleaseImageAttestsAndScans(t *testing.T) {
+	requireTools(t, "bash")
+
+	build := releaseStep(t, "image", stepUses("docker/build-push-action")).get("with")
+	if got := []string{scalarOf(build.get("sbom")), scalarOf(build.get("provenance"))}; !slices.Equal(got, []string{"true", "mode=max"}) {
+		t.Errorf("%s image build sbom, provenance = %q, want true, mode=max", releaseWorkflow, got)
+	}
+
+	steps := readWorkflow(t, releaseWorkflow).get("jobs").get("image").get("steps").items
+	load := slices.IndexFunc(steps, stepRuns("docker load"))
+
+	if load < 0 {
+		t.Fatalf("%s image job never runs docker load", releaseWorkflow)
+	}
+
+	loaded := runImageLoad(t, scalarOf(steps[load].get("run")))
+	scans := scannedImages(t, releaseWorkflow, steps[load:])
+
+	for p := range strings.SplitSeq(scalarOf(build.get("platforms")), ",") {
+		tag := "mro2nf-runtime:smoke-" + strings.TrimPrefix(p, "linux/")
+		if !slices.Contains(loaded, tag) || !slices.Contains(scans, tag) {
+			t.Errorf("platform %s: loaded %q, scanned %q; want %s in both", p, loaded, scans, tag)
+		}
+	}
+
+	if got := scannedImages(t, nightlyWorkflow, readWorkflow(t, nightlyWorkflow).get("jobs").get("imagescan").get("steps").items); len(got) != 1 {
+		t.Errorf("%s imagescan job scans %q, want one image", nightlyWorkflow, got)
+	}
+}
+
+// scannedImages is the image of each anchore/scan-action step, which must
+// apply scanPolicy at the action pin release.yml uses.
+func scannedImages(t *testing.T, file string, steps []*yamlNode) []string {
+	t.Helper()
+
+	pin := scalarOf(releaseStep(t, "image", stepUses("anchore/scan-action")).get("uses"))
+
+	var images []string
+
+	for _, s := range steps {
+		if !stepUses("anchore/scan-action")(s) {
+			continue
+		}
+
+		with := s.get("with")
+		for k, v := range scanPolicy {
+			if got := scalarOf(with.get(k)); got != v {
+				t.Errorf("%s scan of %q: %s = %q, want %q", file, scalarOf(with.get("image")), k, got, v)
+			}
+		}
+
+		if got := scalarOf(s.get("uses")); got != pin {
+			t.Errorf("%s scans with %q, want %q as %s pins it", file, got, pin, releaseWorkflow)
+		}
+
+		images = append(images, scalarOf(with.get("image")))
+	}
+
+	return images
+}
+
+// runImageLoad runs the image job's load step with a stand-in skopeo that
+// writes the docker archive it is asked for and a stand-in docker that
+// reports the tag each loaded archive names, and returns the loaded tags.
+func runImageLoad(t *testing.T, script string) []string {
+	t.Helper()
+
+	const (
+		fakeSkopeo = "#!/bin/bash\n[ \"$1\" = copy ] && [ \"${@: -2:1}\" = \"oci-archive:$RUNNER_TEMP/runtime-image.tar\" ] || exit 1\n" +
+			"dest=${@: -1}; dest=${dest#docker-archive:}; printf '%s' \"${dest#*:}\" > \"${dest%%:*}\"\n"
+		fakeDocker = "#!/bin/bash\n[ \"$1 $2\" = 'load -i' ] || exit 1\ncat \"$3\" >> \"$DOCKER_LOG\"; echo >> \"$DOCKER_LOG\"\n"
+	)
+
+	bin, tmp := t.TempDir(), t.TempDir()
+	for name, body := range map[string]string{"skopeo": fakeSkopeo, "docker": fakeDocker} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	log := filepath.Join(tmp, "docker.log")
+	runReleaseStep(t, script, tmp, "PATH="+bin+":"+os.Getenv("PATH"), "RUNNER_TEMP="+tmp, "DOCKER_LOG="+log)
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Fields(string(raw))
 }
 
 // TestReleaseImagePushNeedsDigest runs the publish job's image push with a
