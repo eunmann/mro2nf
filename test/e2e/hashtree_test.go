@@ -31,7 +31,7 @@ func TestHashTree(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		writeFileT(t, path, content)
+		writeTestFile(t, path, content)
 	}
 
 	for _, rel := range []string{"empty", "d/empty_sub"} {
@@ -80,9 +80,9 @@ func TestPublishedTreeMarksLinks(t *testing.T) {
 	t.Parallel()
 
 	dir, elsewhere := t.TempDir(), t.TempDir()
-	writeABITestFile(t, filepath.Join(dir, "copy.txt"), "x")
-	target := writeABITestFile(t, filepath.Join(elsewhere, "target.txt"), "x")
-	writeABITestFile(t, filepath.Join(elsewhere, "tree", "in.txt"), "y")
+	writeTestFile(t, filepath.Join(dir, "copy.txt"), "x")
+	target := writeTestFile(t, filepath.Join(elsewhere, "target.txt"), "x")
+	writeTestFile(t, filepath.Join(elsewhere, "tree", "in.txt"), "y")
 
 	if err := os.MkdirAll(filepath.Join(elsewhere, "empty"), 0o755); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -193,18 +194,18 @@ func TestEmitConfinesAtLaunch(t *testing.T) {
 // record of them all (map_fork_upstream: GEN, then DBL forked on GEN's
 // map, reads none).
 func TestEmitAliases(t *testing.T) {
-	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+	main := byNode(t, "split_test")
 
-	if !strings.Contains(main, "include { STAGE_SPLIT as N0_SUM_SQUARES_SP ; STAGE_MAIN as N0_SUM_SQUARES_MN ; STAGE_JOIN as N0_SUM_SQUARES_JN } from './stage.nf'") {
+	if !strings.Contains(main, "include { STAGE_SPLIT as N<SUM_SQUARES>_SP ; STAGE_MAIN as N<SUM_SQUARES>_MN ; STAGE_JOIN as N<SUM_SQUARES>_JN } from './stage.nf'") {
 		t.Errorf("split_test's split stage is not the split triad:\n%s", main)
 	}
 
-	up := readTree(t, emitFixture(t, "map_fork_upstream"))["main.nf"]
+	up := byNode(t, "map_fork_upstream")
 
 	for _, want := range []string{
-		"include { STAGE as N0_GEN } from './stage.nf'",
-		"include { STAGE as N1_DBL } from './stage.nf'",
-		"i1 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'MFU.DBL', [], true), [], false)",
+		"include { STAGE as N<GEN> } from './stage.nf'",
+		"include { STAGE as N<DBL> } from './stage.nf'",
+		"i<DBL> = FORK(channel.of([[], [], [], []]), ELEMENTS(o<GEN>_forks, 'MFU.DBL', [], true), [], false)",
 	} {
 		if !strings.Contains(up, want) {
 			t.Errorf("map_fork_upstream's main.nf lacks %q:\n%s", want, up)
@@ -254,13 +255,13 @@ func TestEmitGPURequest(t *testing.T) {
 // gather by the upstream instance's key (fork_mid: SUMALL over SCALE's
 // forks), and OUTS's inputs by node and key.
 func TestEmitOrdersGathers(t *testing.T) {
-	split := readTree(t, emitFixture(t, "split_test"))["main.nf"]
-	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
+	split := byNode(t, "split_test")
+	gather := byNode(t, "fork_mid")
 
 	for _, c := range []struct{ fixture, main, want string }{
-		{"split_test", split, "j0 = JOIN(x0, N0_SUM_SQUARES_MN.out.chunk)\n    N0_SUM_SQUARES_JN(j0)"},
-		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']))\n    n1 = INPUT(u1, [null])"},
-		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
+		{"split_test", split, "j<SUM_SQUARES> = JOIN(x<SUM_SQUARES>, N<SUM_SQUARES>_MN.out.chunk)\n    N<SUM_SQUARES>_JN(j<SUM_SQUARES>)"},
+		{"fork_mid", gather, "u<SUMALL> = READ(b<SUMALL>.run, GATHER(b<SUMALL>.run, o<SCALE>_outs, [], [], ['scaled']))\n    n<SUMALL> = INPUT(u<SUMALL>, [null])"},
+		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o<SUM_SQUARES>_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
 	} {
 		if !strings.Contains(c.main, c.want) {
 			t.Errorf("%s's main.nf lacks %q:\n%s", c.fixture, c.want, c.main)
@@ -285,10 +286,10 @@ func TestEmitOrdersGathers(t *testing.T) {
 // by output like the bundles, and splits apart from them for each task: it
 // stages the bundles and writes the records into a file for mre.
 func TestEmitCarriesValueOutputs(t *testing.T) {
-	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
+	main := byNode(t, "diamond_min")
 
 	for _, want := range []string{
-		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
+		"o<GEN>_outs = POSTED(N<GEN>.out.posted, b<GEN>.skip, r<GEN>, 1)",
 		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
@@ -337,12 +338,12 @@ func TestEmitPostsOneOutput(t *testing.T) {
 	}
 
 	for fixture, want := range map[string]string{
-		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
-		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
-		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
-		"preflight_order":  "d0 = DONE(N0_TOP_CHECK.out.posted)",
+		"diamond_min":      "o<GEN>_outs = POSTED(N<GEN>.out.posted, b<GEN>.skip, r<GEN>, 1)",
+		"zip_runtime":      "o<TWO>_forks = POSTED(N<TWO>.out.posted, b<TWO>.skip, r<TWO>, 4)",
+		"split_gate_entry": "o<SRC>_gates = GATES(N<SRC>.out.posted, b<SRC>.skip)",
+		"preflight_order":  "d<TOP_CHECK> = DONE(N<TOP_CHECK>.out.posted)",
 	} {
-		if main := wiringNF(readTree(t, emitFixture(t, fixture))); !strings.Contains(main, want) {
+		if main := byNode(t, fixture); !strings.Contains(main, want) {
 			t.Errorf("%s's wiring lacks %q:\n%s", fixture, want, main)
 		}
 	}
@@ -356,12 +357,12 @@ func TestEmitPostsOneOutput(t *testing.T) {
 // cellranger_shaped each of 9 instances otherwise staged a bundle of one
 // integer.
 func TestEmitCarriesValueElements(t *testing.T) {
-	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
+	main := byNode(t, "zip_runtime")
 
 	for _, want := range []string{
-		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
-		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
-		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
+		"o<TWO>_forks = POSTED(N<TWO>.out.posted, b<TWO>.skip, r<TWO>, 4)",
+		"ELEMENTS(o<TWO>_forks, 'ZIP_RUNTIME.LONG', [], false)",
+		"ZIP(i<LONG>, o<THREE>_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("zip_runtime's main.nf lacks %q:\n%s", want, main)
@@ -561,12 +562,12 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 		}
 	}
 
-	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+	main := byNode(t, "split_test")
 
 	for _, want := range []string{
-		"s0 = INPUT(b0.run, [])",
-		"N0_SUM_SQUARES_SP(s0)",
-		splitTriad0,
+		"s<SUM_SQUARES> = INPUT(b<SUM_SQUARES>.run, [])",
+		"N<SUM_SQUARES>_SP(s<SUM_SQUARES>)",
+		sumSquaresTriad,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_test's main.nf lacks %q:\n%s", want, main)
@@ -574,24 +575,25 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 	}
 }
 
-// splitTriad0 is the wiring of node 0's split, its chunks' mains and its
-// join, past the split's call: the chunks and the join read the split's
-// outputs joined to its input once (#559), which cost CellRanger 6 edges
-// of Nextflow's DAG per split stage when each joined them anew.
-const splitTriad0 = "    x0 = SPLITS(N0_SUM_SQUARES_SP.out.split, s0)\n" +
-	"    N0_SUM_SQUARES_MN(CHUNKS(x0))\n" +
-	"    j0 = JOIN(x0, N0_SUM_SQUARES_MN.out.chunk)\n" +
-	"    N0_SUM_SQUARES_JN(j0)\n"
+// sumSquaresTriad is the wiring of split node SUM_SQUARES's split, its chunks'
+// mains and its join, past the split's call: the chunks and the join read
+// the split's outputs joined to its input once (#559), which cost
+// CellRanger 6 edges of Nextflow's DAG per split stage when each joined
+// them anew.
+const sumSquaresTriad = "    x<SUM_SQUARES> = SPLITS(N<SUM_SQUARES>_SP.out.split, s<SUM_SQUARES>)\n" +
+	"    N<SUM_SQUARES>_MN(CHUNKS(x<SUM_SQUARES>))\n" +
+	"    j<SUM_SQUARES> = JOIN(x<SUM_SQUARES>, N<SUM_SQUARES>_MN.out.chunk)\n" +
+	"    N<SUM_SQUARES>_JN(j<SUM_SQUARES>)\n"
 
 // TestEmitSizesChunksAndJoin: each chunk's main and the join are scheduled
 // with the resources their jobs get, the split's resources table, a value
 // the driver parses no record for (join_resources: the join requests 2
 // threads and 3 GB; TestWriteResources writes the table).
 func TestEmitSizesChunksAndJoin(t *testing.T) {
-	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
+	main := byNode(t, "join_resources")
 
-	if !strings.Contains(main, splitTriad0) {
-		t.Errorf("join_resources's main.nf lacks %q:\n%s", splitTriad0, main)
+	if !strings.Contains(main, sumSquaresTriad) {
+		t.Errorf("join_resources's main.nf lacks %q:\n%s", sumSquaresTriad, main)
 	}
 
 	for _, want := range []string{
@@ -806,19 +808,19 @@ func TestEmitRefusesKeywordInput(t *testing.T) {
 // entry-fed roots; a node that reads none stages none and joins no entry
 // record (entry_filearr: COUNTARR reads reads; diamond_min has no file).
 func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
-	arr := readTree(t, emitFixture(t, "entry_filearr"))["main.nf"]
+	arr := byNode(t, "entry_filearr")
 
 	for _, want := range []string{
 		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
-		"n0 = INPUT_ENTRY(b0.run, entry, [], [])",
+		"n<COUNTARR> = INPUT_ENTRY(b<COUNTARR>.run, entry, [], [])",
 	} {
 		if !strings.Contains(arr, want) {
 			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
 		}
 	}
 
-	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
-	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "n1 = INPUT(u1, [['y']])") {
+	plain := byNode(t, "diamond_min")
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "n<ADD> = INPUT(u<ADD>, [['y']])") {
 		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
 	}
 
@@ -881,10 +883,10 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 // zip_runtime_map: BY_AX zips ABC.m by key token).
 func TestEmitZipsByToken(t *testing.T) {
 	for _, c := range []struct{ fixture, fork, zip string }{
-		{"zip_runtime", "i2 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false), [], true)", "i2 = ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')"},
-		{"zip_runtime_map", "i3 = FORK(channel.of([[], [], [], []]), ELEMENTS(o1_forks, 'ZIP_RUNTIME_MAP.BY_AX', [], true), [], true)", "i3 = ZIP(i3, o0_forks, [], 'ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m', 0, 'none')"},
+		{"zip_runtime", "i<LONG> = FORK(channel.of([[], [], [], []]), ELEMENTS(o<TWO>_forks, 'ZIP_RUNTIME.LONG', [], false), [], true)", "i<LONG> = ZIP(i<LONG>, o<THREE>_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')"},
+		{"zip_runtime_map", "i<BY_AX> = FORK(channel.of([[], [], [], []]), ELEMENTS(o<AX>_forks, 'ZIP_RUNTIME_MAP.BY_AX', [], true), [], true)", "i<BY_AX> = ZIP(i<BY_AX>, o<ABC>_forks, [], 'ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m', 0, 'none')"},
 	} {
-		main := readTree(t, emitFixture(t, c.fixture))["main.nf"]
+		main := byNode(t, c.fixture)
 
 		for _, want := range []string{c.fork, c.zip} {
 			if !strings.Contains(main, want) {
@@ -913,12 +915,12 @@ func TestEmitZipsByToken(t *testing.T) {
 // N keys (split_gate_entry: SRC gates INNER.WORK and KEYED.WORK, its gates
 // parsed once for both). TestBench's forkdisabled lanes run both paths.
 func TestEmitGatesBySet(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "split_gate_entry")))
+	main := byNode(t, "split_gate_entry")
 
 	for _, want := range []string{
-		"o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
-		"b1 = ENABLED(GATED(g1, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@']], [])",
-		"b2 = ENABLED(GATED(g2, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@']], [])",
+		"o<SRC>_gates = GATES(N<SRC>.out.posted, b<SRC>.skip)",
+		"b<INNER.WORK> = ENABLED(GATED(g<INNER.WORK>, o<SRC>_gates), [[[0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@']], [])",
+		"b<KEYED.WORK> = ENABLED(GATED(g<KEYED.WORK>, o<SRC>_gates), [[[0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@']], [])",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_gate_entry's wiring lacks %q:\n%s", want, main)
@@ -957,11 +959,11 @@ func TestEmitGatesBySet(t *testing.T) {
 // (martian/core/node.go getState), so PLAN writes no fork counts.
 // TestMrpDiff/map_nested_gather runs the fixture against mrp.
 func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
+	main := byNode(t, "map_nested_gather")
 
 	for _, want := range []string{
-		"u1 = READ(b1.run, GATHER(b1.run, o0_outs, [0], [0], ['y']))",
-		"u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']))",
+		"u<BY_ENTRY.TOTAL> = READ(b<BY_ENTRY.TOTAL>.run, GATHER(b<BY_ENTRY.TOTAL>.run, o<BY_ENTRY.SQ>_outs, [0], [0], ['y']))",
+		"u<BY_STAGE.TOTAL> = READ(u<BY_STAGE.TOTAL>, GATHER(b<BY_STAGE.TOTAL>.run, o<BY_STAGE.SQ>_outs, [0], [0], ['y']))",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
@@ -1020,12 +1022,14 @@ func TestEmitGathersAReadAlsoAligned(t *testing.T) {
 // so the reader combines the node's outs channel as it comes, and its
 // process's INPUT picks the outputs each read reads; keying or selecting
 // them per read cost CellRanger 1,263 edges of Nextflow's DAG
-// (map_nested_gather: node 4 reads node 2's xs at its fork of their map
-// root, and gathers node 3's y).
+// (map_nested_gather: BY_STAGE.TOTAL reads MKLIST's xs at its fork of their
+// map root, and gathers SQ's y).
 func TestEmitReadsOutsAsTheyCome(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
+	main := byNode(t, "map_nested_gather")
 
-	want := "u4 = READ(b4.run, o2_outs)\n    u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']))\n    n4 = INPUT(u4, [['xs'], null])"
+	want := "u<BY_STAGE.TOTAL> = READ(b<BY_STAGE.TOTAL>.run, o<BY_STAGE.MKLIST>_outs)\n" +
+		"    u<BY_STAGE.TOTAL> = READ(u<BY_STAGE.TOTAL>, GATHER(b<BY_STAGE.TOTAL>.run, o<BY_STAGE.SQ>_outs, [0], [0], ['y']))\n" +
+		"    n<BY_STAGE.TOTAL> = INPUT(u<BY_STAGE.TOTAL>, [['xs'], null])"
 	if !strings.Contains(main, want) {
 		t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
 	}
@@ -1051,14 +1055,14 @@ func TestEmitReadsOutsAsTheyCome(t *testing.T) {
 // of their map root, position 0, and at none). TestMrpDiff/gate_chain runs
 // it against mrp.
 func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
-	got := assignments(wiringNF(readTree(t, emitFixture(t, "gate_chain"))), "u4", "n4")
+	got := assignments(byNode(t, "gate_chain"), "u<INNER.WORK>", "n<INNER.WORK>")
 
 	want := []string{
-		"u4 = READ(b4.run, o0_outs)",
-		"u4 = READ(REKEY(u4, [['y']], [0]), o2_outs)",
-		"u4 = READ(u4, o3_outs)",
-		"u4 = READ(REKEY(u4, [['y'], ['off']], []), o1_outs)",
-		"n4 = INPUT(u4, [['off']])",
+		"u<INNER.WORK> = READ(b<INNER.WORK>.run, o<BASE>_outs)",
+		"u<INNER.WORK> = READ(REKEY(u<INNER.WORK>, [['y']], [0]), o<INNER.ADD>_outs)",
+		"u<INNER.WORK> = READ(u<INNER.WORK>, o<INNER.FLAG>_outs)",
+		"u<INNER.WORK> = READ(REKEY(u<INNER.WORK>, [['y'], ['off']], []), o<OUTER>_outs)",
+		"n<INNER.WORK> = INPUT(u<INNER.WORK>, [['off']])",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("gate_chain's WORK (-want +got):\n%s", diff)
@@ -1092,12 +1096,12 @@ func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
 // position 0, by INNER's FLAG, then at no fork by OUTER).
 // TestMrpDiff/gate_chain runs it against mrp.
 func TestEmitKeysGatesWhereTheirRootsChange(t *testing.T) {
-	got := assignments(wiringNF(readTree(t, emitFixture(t, "gate_chain"))), "g4", "b4")
+	got := assignments(byNode(t, "gate_chain"), "g<INNER.WORK>", "b<INNER.WORK>")
 
 	want := []string{
-		"g4 = GATE(i4, nodes, [node: 'GATE_CHAIN.INNER.WORK', special: ''], [0])",
-		"g4 = GATED(g4, o3_gates)",
-		"b4 = ENABLED(GATED(REGATE(g4, [[[], 'GATE_CHAIN.INNER.WORK@@']], []), o1_gates), [[[], 'GATE_CHAIN.INNER.WORK@@']], [])",
+		"g<INNER.WORK> = GATE(i<INNER.WORK>, nodes, [node: 'GATE_CHAIN.INNER.WORK', special: ''], [0])",
+		"g<INNER.WORK> = GATED(g<INNER.WORK>, o<INNER.FLAG>_gates)",
+		"b<INNER.WORK> = ENABLED(GATED(REGATE(g<INNER.WORK>, [[[], 'GATE_CHAIN.INNER.WORK@@']], []), o<OUTER>_gates), [[[], 'GATE_CHAIN.INNER.WORK@@']], [])",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("gate_chain's WORK (-want +got):\n%s", diff)
@@ -1158,13 +1162,79 @@ func wiringNF(tree map[string]string) string {
 	return b.String()
 }
 
+var (
+	numberedAlias   = regexp.MustCompile(`\bN(\d+)_\w+`)
+	numberedHold    = regexp.MustCompile(`\bnodes_after((?:_\d+)+)\b`)
+	numberedChannel = regexp.MustCompile(`(^|[\s(\[,])([a-z])(\d+)(_outs|_forks|_gates)?\b`)
+)
+
+// byNode is fixture's project's wiring (wiringNF) with each name the emitter
+// numbers by its node's place in the dependency order, a process alias
+// (N0_GEN), a node's channels (b0, o0_outs) and a hold of its preflights
+// (nodes_after_0_2), naming the node by its fqid less the pipeline's own id
+// (N<GEN>, b<GEN>, o<GEN>_outs, nodes_after<TOP_CHECK><SUB.CHECK>): a pin
+// names the nodes it wires, whatever their order.
+func byNode(t *testing.T, fixture string) string {
+	t.Helper()
+
+	dir := fixturePath(t, fixture)
+
+	src, err := cg.ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := newProject(src, Options{MroPaths: []string{dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node := func(digits string) (int, string) {
+		i, err := strconv.Atoi(digits)
+		if err != nil || i >= len(p.topo.Nodes) {
+			t.Fatalf("%s: no node %s", fixture, digits)
+		}
+
+		fqid := p.topo.Nodes[i].Fqid
+		if _, rest, ok := strings.Cut(fqid, "."); ok {
+			return i, "<" + rest + ">"
+		}
+
+		return i, "<" + fqid + ">"
+	}
+
+	nf := numberedAlias.ReplaceAllStringFunc(wiringNF(readTree(t, emitFixture(t, fixture))), func(m string) string {
+		i, name := node(numberedAlias.FindStringSubmatch(m)[1])
+
+		return "N" + name + strings.TrimPrefix(m, alias(i, p.topo.Nodes[i].Fqid))
+	})
+	nf = numberedHold.ReplaceAllStringFunc(nf, func(m string) string {
+		out := "nodes_after"
+		var outSb1189 strings.Builder
+		for d := range strings.SplitSeq(strings.TrimPrefix(numberedHold.FindStringSubmatch(m)[1], "_"), "_") {
+			_, name := node(d)
+			outSb1189.WriteString(name)
+		}
+		out += outSb1189.String()
+
+		return out
+	})
+
+	return numberedChannel.ReplaceAllStringFunc(nf, func(m string) string {
+		s := numberedChannel.FindStringSubmatch(m)
+		_, name := node(s[3])
+
+		return s[1] + s[2] + name + s[4]
+	})
+}
+
 // TestEmitWaitsForPreflights: a preflight signals once every instance of it
 // is done; PLAN's node records are held until it is, after the preflights
 // before it some node also waits for; and each node gates its instances on
 // the records held for its own preflights (preflight_order: TOP_CHECK gates
 // every other call, SUB's CHECK gates WORK).
 func TestEmitWaitsForPreflights(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "preflight_order")))
+	main := byNode(t, "preflight_order")
 
 	var got []string
 
@@ -1175,14 +1245,14 @@ func TestEmitWaitsForPreflights(t *testing.T) {
 	}
 
 	want := []string{
-		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: ''], []), [], [])",
-		"d0 = DONE(N0_TOP_CHECK.out.posted)",
-		"nodes_after_0 = AFTER(nodes, d0)",
-		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: ''], []), [], [])",
-		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: ''], []), [], [])",
-		"d2 = DONE(N2_CHECK.out.posted)",
-		"nodes_after_0_2 = AFTER(nodes_after_0, d2)",
-		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: ''], []), [], [])",
+		"b<TOP_CHECK> = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: ''], []), [], [])",
+		"d<TOP_CHECK> = DONE(N<TOP_CHECK>.out.posted)",
+		"nodes_after<TOP_CHECK> = AFTER(nodes, d<TOP_CHECK>)",
+		"b<EMIT> = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after<TOP_CHECK>, [node: 'TOP.EMIT', special: ''], []), [], [])",
+		"b<SUB.CHECK> = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after<TOP_CHECK>, [node: 'TOP.SUB.CHECK', special: ''], []), [], [])",
+		"d<SUB.CHECK> = DONE(N<SUB.CHECK>.out.posted)",
+		"nodes_after<TOP_CHECK><SUB.CHECK> = AFTER(nodes_after<TOP_CHECK>, d<SUB.CHECK>)",
+		"b<SUB.WORK> = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after<TOP_CHECK><SUB.CHECK>, [node: 'TOP.SUB.WORK', special: ''], []), [], [])",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("preflight_order's gates and holds (-want +got):\n%s", diff)
