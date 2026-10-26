@@ -32,7 +32,7 @@ type planFlags struct {
 
 func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.entry, "entry", "", "the transpiled entry .mro")
-	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null keeps the transpiled one")
+	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null sets the input to null, and an input it leaves out keeps the transpiled value")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
 	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
@@ -184,8 +184,10 @@ func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 
 // overlayInvocation is the source's invocation with the run's entry values
 // over its own: a string for a scalar input parsed as its declared type, as
-// a command-line param is a string, and a split input's value in Martian's
-// invocation form, {"split": v}, whose v the rebuilt call splits.
+// a command-line param is a string, a null as the null literal mrp's
+// invocation takes, and a split input's value in Martian's invocation form,
+// {"split": v}, whose v the rebuilt call splits. An input the values leave
+// out keeps the source's value.
 func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*core.InvocationData, error) {
 	inv := *src.Invocation
 	inv.Args = maps.Clone(src.Invocation.Args)
@@ -219,10 +221,6 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 	}
 
 	for _, k := range slices.Sorted(maps.Keys(over)) {
-		if over[k] == nil {
-			continue
-		}
-
 		v, err := json.Marshal(types.Sorted(over[k]))
 		if err != nil {
 			return nil, fmt.Errorf("encode entry value %s: %w", k, err)

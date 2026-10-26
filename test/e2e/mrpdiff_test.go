@@ -824,6 +824,18 @@ func TestMrpDiffFloatOverride(t *testing.T) {
 	}
 }
 
+// TestMrpDiffNullOverride (#625): a null in a -params-file sets the entry
+// input to null, as a null literal in mrp's invocation does, where an input
+// the launch leaves unset keeps the transpiled value: cli_typed's n and b
+// reach the stage as None, f and g as the .mro gives them.
+func TestMrpDiffNullOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	runMrpDiffOverride(t, martianBin(t), "cli_typed", "override_null.mro", "params.json", `{"n": null, "b": null}`)
+}
+
 // runMrpDiffOverride runs fixture under Nextflow with the launch values
 // params in the params file named file, and the invocation mro, whose
 // literals are those values, under mrp, and diffs the two.

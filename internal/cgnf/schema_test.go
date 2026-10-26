@@ -175,6 +175,23 @@ func TestEmitParamsSchema(t *testing.T) {
 	}
 }
 
+// TestEmitTellsANullFromAnUnsetInput (#625): conf/base.config gives each
+// entry input a value no launch spells, which PLAN's values leave out, so
+// the input keeps the transpiled value, while a -params-file null, which
+// Nextflow passes through over it, reaches PLAN as null, which sets the
+// input to null, as a null in mrp's invocation does.
+func TestEmitTellsANullFromAnUnsetInput(t *testing.T) {
+	tree := emitSource(t, typedEntrySrc)
+
+	if want := "params.n = 'mro2nf:transpiled'\n"; !strings.Contains(tree["conf/base.config"], want) {
+		t.Errorf("conf/base.config lacks %q:\n%s", want, tree["conf/base.config"])
+	}
+
+	if want := "].findAll { e -> e.value != 'mro2nf:transpiled' })"; !strings.Contains(tree["main.nf"], want) {
+		t.Errorf("main.nf lacks %q:\n%s", want, tree["main.nf"])
+	}
+}
+
 // TestEmitDeclaresEveryLaunchParam (#357): main.nf's params block declares
 // exactly the params conf/base.config sets, so Nextflow fails a launch
 // setting another; it types a string entry input as a String, every other

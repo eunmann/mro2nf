@@ -58,6 +58,23 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 	return work, err
 }
 
+// TestPlanSetsNullValues (#625): a null entry value sets the input to null,
+// as the null literal in mrp's invocation does, and an input the values
+// leave out keeps the transpiled value.
+func TestPlanSetsNullValues(t *testing.T) {
+	work, err := plan(t, "cli_typed", `{"n": null, "b": null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := planCall(t, work)
+	for _, want := range []string{"n = null,", "b = null,", "f = 0.5,", "g = 0.25,"} {
+		if !strings.Contains(call, want) {
+			t.Errorf("the call lacks %q:\n%s", want, call)
+		}
+	}
+}
+
 // TestPlanFindsThePipelinesVersion (#625): PLAN finds the pipelines'
 // version once for the run, as mrp does at its start (cmd/mrp/configure.go
 // GetMroVersion), on the include path the stage tasks find the code on, not
@@ -456,7 +473,7 @@ func TestPlanForksByTheSplitValue(t *testing.T) {
 	}
 
 	for _, values := range []string{
-		`{"x":[4,5]}`, `{"x":5}`, `{"x":"5"}`, `{"x":{}}`, `{"x":{"split":5}}`, `{"x":{"split":null}}`, `{"x":{"split":"[4,5]"}}`,
+		`{"x":[4,5]}`, `{"x":5}`, `{"x":"5"}`, `{"x":{}}`, `{"x":null}`, `{"x":{"split":5}}`, `{"x":{"split":null}}`, `{"x":{"split":"[4,5]"}}`,
 	} {
 		_, err := planEntry(t, dir, values)
 		if !errors.Is(err, errSplitShape) || !strings.Contains(err.Error(), `entry input "x"`) {

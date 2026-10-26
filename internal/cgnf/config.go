@@ -39,10 +39,10 @@ func (p *project) baseConfig() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
+	b.WriteString("// The entry inputs: left at this value, an input keeps the transpiled\n// invocation's value; a -params-file null sets it to null.\n")
 
 	for _, lp := range p.inputs {
-		fmt.Fprintf(&b, "params.%s = null\n", lp.id)
+		fmt.Fprintf(&b, "params.%s = %s\n", lp.id, gstr(unsetInput))
 	}
 
 	b.WriteString(processConfig())

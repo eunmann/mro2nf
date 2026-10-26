@@ -63,12 +63,13 @@ func typeOverrides(over map[string]any, params []*syntax.StructMember, tbl *type
 
 // splitOverrides checks the override of each split entry input is Martian's
 // invocation form of a split (core/runtime.go convertToExp): an object whose
-// split member is an array or a map, which forks the call. The compile types
-// its elements, as mrp's does.
+// split member is an array or a map, which forks the call; a null, which
+// mrp's invocation cannot split, is none. The compile types its elements, as
+// mrp's does.
 func splitOverrides(over map[string]any, split []string) error {
 	for _, id := range split {
 		v, ok := over[id]
-		if !ok || v == nil || isSplit(v) {
+		if !ok || isSplit(v) {
 			continue
 		}
 

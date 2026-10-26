@@ -19,6 +19,7 @@ same value written in the `.mro` would under `mrp`.
 | `int`, `float`, `bool`, `string` | command line or `-params-file` | `--n 5 --scale 2.5 --skip false` |
 | array, map, struct | typed JSON in a `-params-file` | `{"values": [5, 6, 7]}` |
 | an input the top-level `map call` splits | Martian's split form in a `-params-file` | `{"x": {"split": [4, 5]}}` |
+| `null`, as a `null` in the `.mro`'s `call` | `null` in a `-params-file` (on the command line, `--n null` is the string `null`) | `{"n": null}` |
 | `file`, `path`, a `filetype` | an absolute path or an `s3://` URI | `--reads /data/r1.fastq` |
 | an input whose name starts with `_` | `--_name=value` (Nextflow reads only a name starting with a letter or digit in `--name value`) | `--_tag=x` |
 

@@ -55,6 +55,13 @@ const mro2nfGroup = "mro2nf_options"
 // null is the null literal of Groovy and of JSON.
 const null = "null"
 
+// unsetInput is the value conf/base.config gives each entry input. Nextflow
+// passes a -params-file null through over a config value, so a null and an
+// unset input reach the driver apart: PLAN's values leave out an input at
+// this value, which keeps the transpiled value, and carry a null, which
+// sets the input to null, as a null literal in mrp's invocation does.
+const unsetInput = "mro2nf:transpiled"
+
 func schemaGroups() []paramGroup {
 	return []paramGroup{
 		{
@@ -197,7 +204,7 @@ func profileSet(p launchParam) launchParam {
 	return p
 }
 
-// entryInputs are the entry inputs as run params: each null in
+// entryInputs are the entry inputs as run params: each unsetInput in
 // conf/base.config, keeping the value of the .mro's call, which the schema
 // gives as its default.
 func (p *project) entryInputs() ([]launchParam, error) {

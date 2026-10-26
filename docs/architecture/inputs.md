@@ -17,9 +17,12 @@ flowchart LR
 ```
 
 - **Parameters.** Every entry input is a nullable Nextflow parameter,
-  `params.<name>`; null keeps the transpiled value. PLAN hands them to `mre
-  plan` as one JSON object, which overlays them on the invocation data and
-  recompiles the call. So a launch value can change the run's forks, gates and
+  `params.<name>`, which `conf/base.config` sets to `'mro2nf:transpiled'`, a
+  value no launch spells. Nextflow passes a `-params-file` null through over
+  it, so PLAN hands `mre plan` one JSON object of the inputs the launch set, a
+  null included, which sets the input to null as a null literal in `mrp`'s
+  invocation does; an input it leaves out keeps the transpiled value. `mre
+  plan` overlays them on the invocation data and recompiles the call. So a launch value can change the run's forks, gates and
   pruned calls as an invocation literal would under `mrp`.
 - **Declared parameters.** `main.nf`'s `params` block declares every launch
   parameter, the entry inputs and the project's own (`paramsBlock`, from the
