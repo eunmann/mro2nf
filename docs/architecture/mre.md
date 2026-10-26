@@ -150,7 +150,18 @@ The post step runs after the stage's last job, on the outputs the job wrote.
 
 1. **Validate.** It checks them with Martian's
    `LazyArgumentMap.ValidateOutputs`, as `mrp`'s `Fork.verifyOutput` does.
-2. **Fork elements.** It writes one element per fork of every root this stage
+2. **Outputs.** It writes the outputs one by one, so a consumer gets only the
+   outputs it reads: a small one as a record in the `-field-values` file,
+   `<output>:` and base64 of the instance's stamp and the output's JSON; any
+   other as one bundle stamped with the instance (`instance.json`),
+   `<-fields>/<output>/`, the files it names staged as the job's own and
+   confined, but each whole leaf of a bundle the task staged named by
+   reference, which `-field-refs`, and for element directories `-fork-refs`,
+   list ([Files by reference](bundles.md#files-by-reference)). An element
+   names a file one of these bundles holds by reference too, to the bundle
+   (`outs/<output>`), so the task writes the file, and an object-store work
+   directory uploads it, once.
+3. **Fork elements.** It writes one element per fork of every root this stage
    feeds: `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in `mrp`'s
    fork order (array index, or map keys in byte order). Each holds that fork's
    element of the source collection and `fork.json`, which records the real
@@ -161,7 +172,7 @@ The post step runs after the stage's last job, on the outputs the job wrote.
    JSON. A map key's fork also carries the key's token,
    the hex SHA-256 of the key, after an `@`; an array fork's token is its
    index.
-3. **Partner elements.** For each output that a map call splits other than as
+4. **Partner elements.** For each output that a map call splits other than as
    its root's source (a map call zipping several outputs, or a disable binding
    splitting one), it writes one partner element per element,
    `forks/<root>@<node>.<output>/<token>/`, a directory or a value record by
@@ -170,14 +181,6 @@ The post step runs after the stage's last job, on the outputs the job wrote.
    it lacks, as `mrp` reads it. A zip of maps at run time need not share
    keys (`zip_runtime_map`). An instance therefore gets only its own elements,
    and no key ever needs escaping.
-4. **Outputs.** It writes the outputs one by one, so a consumer gets only the
-   outputs it reads: a small one as a record in the `-field-values` file,
-   `<output>:` and base64 of the instance's stamp and the output's JSON; any
-   other as one bundle stamped with the instance (`instance.json`),
-   `<-fields>/<output>/`, the files it names staged as the job's own and
-   confined, but each whole leaf of a bundle the task staged named by
-   reference, which `-field-refs`, and for element directories `-fork-refs`,
-   list ([Files by reference](bundles.md#files-by-reference)).
 5. **Gates.** With `-gates`, it writes the instances the outputs disable: of
    each node with a disable binding that reads this stage alone, every fork it
    resolves true at, as `mrp`'s `Fork.disabled` reads it (a null reads false),

@@ -449,6 +449,10 @@ func (m leafMarker) mark(leaf string) (string, error) {
 		return marker, nil
 	}
 
+	if marker, ok := m.ownReference(origin); ok {
+		return marker, nil
+	}
+
 	name, err := leafName(src, abs)
 	if err != nil {
 		return "", err
