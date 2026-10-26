@@ -772,9 +772,10 @@ func TestArgsReadsStagedEntryFiles(t *testing.T) {
 	}
 
 	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
+	writeTestFile(t, "leaves", "0\n")
 
 	gf := graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: filepath.Join(work, "call"), mropath: fx}
-	if _, _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "0"}, "args"); err != nil {
+	if _, _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "leaves"}, "args"); err != nil {
 		t.Fatal(err)
 	}
 

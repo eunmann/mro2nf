@@ -120,8 +120,10 @@ OUTS, whose post-processing publishes such a file only where it finds it, as
 directory ([Run time](runtime.md#outs)).
 
 - The driver hands each value to `file(x, glob: false)`, so the head node never
-  globs a name, and a task stages its list as `entry/<i>/<name>`. `mre stage
-  -leaves` and `mre outs -leaves` map each value to the path it reads it at.
+  globs a name, and a task stages its list as `entry/<i>/<name>`. The task's
+  script writes the values' indices into a file, so its command line does not
+  grow with them, and `mre stage -leaves` and `mre outs -leaves` read it to map
+  each value to the path the task reads it at.
 - The stage gets a staged value as a leaf linked below its args directory,
   `<task>/args/f/L<nnnn>/<name>`: the same file name and content, at another
   path than the value `mrp` passes.

@@ -229,7 +229,7 @@ func splitTasks(node string, in ...string) [][]string {
 // stageTasks are a run of stageMRO's enabled tasks, in dependency order,
 // each fork of EACH given its fork record as a value.
 func stageTasks(records []string) [][]string {
-	tasks := append(splitTasks("P.SQ", "-leaves", "0"), unsplitTask("P.ADD", "add", "-values", "jn/values"), unsplitTask("P.CP", "cp", "-leaves", "0"))
+	tasks := append(splitTasks("P.SQ", "-leaves", "leaves"), unsplitTask("P.ADD", "add", "-values", "jn/values"), unsplitTask("P.CP", "cp", "-leaves", "leaves"))
 	for i, rec := range records {
 		tasks = append(tasks, unsplitTask("P.EACH", "each"+strconv.Itoa(i), "-fork", rec))
 	}
@@ -238,8 +238,9 @@ func stageTasks(records []string) [][]string {
 }
 
 // stageWork makes a new task work dir at work and enters it, as a run's
-// tasks find theirs: the entry file staged as entry/1/, and the forks of
-// EACH PLAN fixed. It returns their fork records.
+// tasks find theirs: the entry file staged as entry/1/, its index in the
+// leaves file, and the forks of EACH PLAN fixed. It returns their fork
+// records.
 func stageWork(t *testing.T, mro, work string) []string {
 	t.Helper()
 
@@ -249,6 +250,7 @@ func stageWork(t *testing.T, mro, work string) []string {
 
 	t.Chdir(work)
 	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
+	writeTestFile(t, "leaves", "0\n")
 
 	entryForks(t, graphFlags{entry: mro}, "plan")
 
@@ -350,7 +352,7 @@ func TestStageTasks(t *testing.T) {
 
 	wantLinkedArgs(t, tree)
 
-	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-leaves", "0", "-args", "jn2/args", "-chunks", "sp/chunks",
+	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-leaves", "leaves", "-args", "jn2/args", "-chunks", "sp/chunks",
 		"-chunkouts", t.TempDir(), "-work", "jn2")
 	if !errors.Is(err, errNoChunk) {
 		t.Errorf("join without chunk outs: %v, want errNoChunk", err)

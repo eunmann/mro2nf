@@ -89,7 +89,7 @@ type argsFlags struct {
 func (a *argsFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&a.node, "node", "", "stage fqid")
 	fs.StringVar(&a.digest, "digest", "", "the node's spec digest in the run's plan, which it must compile to")
-	fs.StringVar(&a.leaves, "leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
+	fs.StringVar(&a.leaves, "leaves", "", leavesUsage)
 	fs.StringVar(&a.values, "values", "", "file of the upstream outputs and fork and partner elements the task got as values, whitespace-separated records a post wrote (-field-values, -fork-values)")
 	fs.StringVar(&a.refs, "refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged items name by origin (-field-refs, -fork-refs, -out-refs) where no staged item holds them")
 	fs.Var(&a.in, "in", "staged item, or dir of staged items: instance outs bundles, fork elements and partner elements (repeatable)")
@@ -146,16 +146,25 @@ func (a *argsFlags) write(g *cg.Graph, out string, refs shim.Refs) (cg.Instance,
 	return inst, args, nil
 }
 
-// stagedEntryFiles maps the entry file values -leaves lists, which the
-// task staged below entry/, to the paths it reads them at.
-func stagedEntryFiles(g *cg.Graph, leaves string) (map[string]string, error) {
-	if leaves == "" {
+const leavesUsage = "file of the indices of the run's entry file values the task staged, whitespace-separated, the i-th in entry/<i>/, from 1"
+
+// stagedEntryFiles maps the entry file values the file at path lists, which
+// the task staged below entry/, to the paths it reads them at; "" lists
+// none. A task writes the indices into a file, as a wide instance's could
+// pass the kernel's limit on a command line.
+func stagedEntryFiles(g *cg.Graph, path string) (map[string]string, error) {
+	if path == "" {
 		return nil, nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read -leaves: %w", err)
 	}
 
 	var ids []int
 
-	for f := range strings.SplitSeq(leaves, ",") {
+	for f := range strings.FieldsSeq(string(raw)) {
 		id, err := strconv.Atoi(f)
 		if err != nil {
 			return nil, fmt.Errorf("-leaves: %w", err)
@@ -216,7 +225,7 @@ func runOuts(ctx context.Context, argv []string) error {
 	outsJSON := fs.String("json", "pipeline_outs.json", "file to write the outs JSON to")
 	work := fs.String("work", "pipestance", "dir to reconstruct the pipestance in")
 	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, or a -refs <n> dir, and where its producing task's work dir keeps it")
-	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
+	leaves := fs.String("leaves", "", leavesUsage)
 	valuesFile := fs.String("values", "", "file of the stage outputs the task got as values, whitespace-separated records a post wrote (-field-values)")
 	refs := fs.String("refs", "", "dir of the bundles holding the leaves the task staged by reference, each at <n>/, which the staged outs name by origin where no staged outs bundle holds them; -locations locates each <n>")
 

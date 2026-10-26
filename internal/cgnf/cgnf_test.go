@@ -304,7 +304,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
 		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",
 		"cmd += ' -values values'",
-		"cat > values <<'MRO2NF_VALUES'",
+		"${recordsFile('values', values)}",
 		"-in in -refs refs${values ? ' -values values' : ''}",
 	} {
 		if !strings.Contains(stageModule, want) {
@@ -550,7 +550,7 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 		body, _, _ = strings.Cut(body, "\n}\n")
 		_, output, _ := strings.Cut(body, "output:\n")
 
-		for _, want := range []string{inputs, "${valuesFile(values)}\n    mkdir -p in refs\n", "${args(meta, forks, values, leaves)} -args args "} {
+		for _, want := range []string{inputs, "${recordsFile('leaves', leaves)}\n    mkdir -p in refs\n", "${args(meta, forks, values, leaves)} -args args "} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s lacks %q:\n%s", proc, want, body)
 			}
@@ -824,7 +824,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 
 	for _, want := range []string{
 		"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')",
-		"-leaves ${shq(leaves.join(','))}",
+		"cmd += ' -leaves leaves'",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[v[4].node + ' ' + (v[1][at].join('.') ?: '-')] ?: []",
 		"inputOf(v, fields, ids, ids.collect { x -> ef.leaves[x] })",
@@ -868,9 +868,39 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
 	}
 
-	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish/publish.json"} {
+	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves leaves' : ''} -manifest publish/publish.json"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
+		}
+	}
+}
+
+// TestEmitWritesEntryIndicesToAFile (#625): a task names the entry files it
+// staged to mre by their indices in a file its script writes, as it does its
+// value records, so its command line stays the same length however many it
+// staged; as one argument, 25,000 of them failed the task with "Argument
+// list too long".
+func TestEmitWritesEntryIndicesToAFile(t *testing.T) {
+	if strings.Contains(stageModule, "leaves.join(") {
+		t.Error("stage.nf joins the entry file indices into an argument")
+	}
+
+	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN", "OUTS"} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		body, _, _ = strings.Cut(body, "\n}\n")
+
+		if !strings.Contains(body, "    ${recordsFile('values', values)}\n    ${recordsFile('leaves', leaves)}\n") {
+			t.Errorf("%s does not write its value records and entry file indices into files:\n%s", proc, body)
+		}
+	}
+
+	for _, want := range []string{
+		"cmd += ' -leaves leaves'",
+		`def end = "MRO2NF_${name.toUpperCase()}"`,
+		`return records ? "cat > ${name} <<'${end}'\n${records.join('\n')}\n${end}" : ''`,
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 }
