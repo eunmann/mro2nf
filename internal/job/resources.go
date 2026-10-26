@@ -8,16 +8,29 @@ import (
 	"github.com/martian-lang/martian/martian/core"
 )
 
-// The defaults of jobmanagers/config.json's settings: an unset thread or
-// memory request gets one thread and 1 GB, and an unset vmem request the
-// memory plus 3 GB.
 const (
-	threadsPerJob = 1
-	memGBPerJob   = 1
-	extraVMemGB   = 3
-	centiPerCore  = 100
-	mbPerGB       = 1024
+	centiPerCore    = 100
+	mbPerGB         = 1024
+	extraVmemPerJob = 3
 )
+
+// Settings are the settings of mrp's jobmanagers/config.json
+// (core.JobManagerSettings) a job is granted and run by: an unset thread or
+// memory request gets one thread and 1 GB, an unset vmem request the memory
+// plus 3 GB, and each thread variable the job's threads
+// (core/jobmanager.go:65 threadEnvs).
+func Settings() core.JobManagerSettings {
+	return core.JobManagerSettings{
+		ThreadEnvs: []string{
+			"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS",
+			"OMP_NUM_THREADS", "OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS",
+			"TF_NUM_THREADS",
+		},
+		ThreadsPerJob: 1,
+		MemGBPerJob:   1,
+		ExtraVmemGB:   extraVmemPerJob,
+	}
+}
 
 // ErrPool is a local pool without both cores and memory.
 var ErrPool = errors.New("a local pool needs at least one core and 1 GB")
@@ -83,20 +96,21 @@ func request(using, def *core.JobResources) core.JobResources {
 // grants an adaptive memory request the memory free when the job starts,
 // within the pool; the task is sized to the pool, so it is granted that.
 func (p Pool) grant(res core.JobResources) core.JobResources {
+	s := Settings()
 	poolMB := int64(p.MemGB) * mbPerGB
 
 	memMB := units(res.MemGB, mbPerGB)
 
 	switch {
 	case memMB == 0:
-		memMB = memGBPerJob * mbPerGB
+		memMB = int64(s.MemGBPerJob) * mbPerGB
 	case memMB < 0:
 		memMB = max(-memMB, poolMB)
 	}
 
 	vmemMB := units(res.VMemGB, mbPerGB)
 	if vmemMB == 0 {
-		vmemMB = memMB + extraVMemGB*mbPerGB
+		vmemMB = memMB + int64(s.ExtraVmemGB)*mbPerGB
 	}
 
 	memMB = min(memMB, poolMB)
@@ -118,7 +132,7 @@ func (p Pool) threads(t float64) float64 {
 
 	switch {
 	case centi == 0:
-		return threadsPerJob
+		return float64(Settings().ThreadsPerJob)
 	case centi < 0 || centi > int64(p.Cores)*centiPerCore:
 		return float64(p.Cores)
 	default:
@@ -142,18 +156,20 @@ func units(v float64, per int64) int64 {
 // --mempercore: an adaptive request at its magnitude, whole threads, and no
 // cap.
 func clusterGrant(res core.JobResources) core.JobResources {
+	s := Settings()
+
 	res.Threads = math.Ceil(math.Abs(res.Threads))
 	if res.Threads == 0 {
-		res.Threads = threadsPerJob
+		res.Threads = float64(s.ThreadsPerJob)
 	}
 
 	res.MemGB = math.Abs(res.MemGB)
 	if res.MemGB == 0 {
-		res.MemGB = memGBPerJob
+		res.MemGB = float64(s.MemGBPerJob)
 	}
 
 	if res.VMemGB < 1 {
-		res.VMemGB = res.MemGB + extraVMemGB
+		res.VMemGB = res.MemGB + float64(s.ExtraVmemGB)
 	}
 
 	return res
