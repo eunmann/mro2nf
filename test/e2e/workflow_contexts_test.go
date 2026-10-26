@@ -148,7 +148,8 @@ func TestRequiredContextsExact(t *testing.T) {
 // TestRequiredContextsGatedOnChanges checks every required job skips only on
 // the `changes` job's successful docs-only verdict, under an explicit status
 // function: with the implicit success(), a failed `changes` would skip every
-// required job, and GitHub counts those skips as passing.
+// required job, and GitHub counts those skips as passing. Unit tests instead
+// skips only its code steps on that verdict.
 func TestRequiredContextsGatedOnChanges(t *testing.T) {
 	jobs := workflowJobs(t, gateWorkflow)
 	if !slices.ContainsFunc(jobs, func(j workflowJob) bool { return j.id == "changes" }) {
@@ -164,9 +165,60 @@ func TestRequiredContextsGatedOnChanges(t *testing.T) {
 			t.Errorf("job %q needs %v, want it to include changes", j.id, j.needs)
 		}
 
+		if j.id == docsTestsJob {
+			checkDocsTestsJob(t, j)
+
+			continue
+		}
+
 		if !slices.Contains(docsOnlyGates, j.cond) {
 			t.Errorf("job %q if %q, want one of %q", j.id, j.cond, docsOnlyGates)
 		}
+	}
+}
+
+// The required job that runs on every PR, so a docs-only PR still runs the
+// tests of the files it changes; its other scripts carry codeStepGate, the
+// docs-only gate at step level.
+const (
+	docsTestsJob  = "test"
+	docsTestsCond = "${{ !cancelled() }}"
+	docsTests     = "go test ./test/docs ./test/divergence ./test/e2e"
+	codeStepGate  = "${{ !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}"
+)
+
+func checkDocsTestsJob(t *testing.T, j workflowJob) {
+	t.Helper()
+
+	if j.cond != docsTestsCond {
+		t.Errorf("job %q if %q, want %q so it runs on every PR", j.id, j.cond, docsTestsCond)
+	}
+
+	docs := false
+
+	for i, s := range readWorkflow(t, gateWorkflow).get("jobs").get(j.id).get("steps").items {
+		run := s.get("run")
+		if run == nil {
+			continue
+		}
+
+		var cond string
+		if c := s.get("if"); c != nil {
+			cond = c.scalar
+		}
+
+		switch {
+		case run.scalar == docsTests && cond == "":
+			docs = true
+		case run.scalar == docsTests:
+			t.Errorf("job %q step %d runs the docs tests only if %q", j.id, i, cond)
+		case cond != codeStepGate:
+			t.Errorf("job %q step %d (%q) if %q, want %q", j.id, i, run.scalar, cond, codeStepGate)
+		}
+	}
+
+	if !docs {
+		t.Errorf("job %q never runs %q unconditionally", j.id, docsTests)
 	}
 }
 

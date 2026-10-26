@@ -11,7 +11,9 @@
 
 PR Validation does not run again on `main`: a PR merges only when it is up to
 date with `main`, so its run already validated the merged tree. A PR that
-changes only Markdown, `docs/`, `.claude/` or `LICENSE` skips the code jobs.
+changes only Markdown, `docs/`, `.claude/` or `LICENSE` skips the code jobs;
+its Unit tests job runs only the tests that read those files: `test/docs`,
+`test/divergence` and the untagged tests of `test/e2e`.
 
 The nightly run skips a scheduled tier when the current `main` commit and the
 latest stable Nextflow have already passed it. The weekly tier, or a dispatch
