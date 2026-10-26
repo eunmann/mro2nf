@@ -59,7 +59,13 @@ func TestRootsHolds(t *testing.T) {
 // the input it was given under the root stays the path it is; Except
 // recognizes the dir by its absolute and its real path.
 func TestRootsExceptTheTaskDir(t *testing.T) {
-	base := t.TempDir()
+	// macOS's temp dir is under /var, a link to /private/var: own must be
+	// spelled by the task dir's absolute or real path, as Except names it.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	input := writeSelfNamed(t, filepath.Join(base, "ref", "genome.fa"))
 	own := writeSelfNamed(t, filepath.Join(base, "task", "main", "files", "out.txt"))
 
