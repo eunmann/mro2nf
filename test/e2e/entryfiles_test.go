@@ -33,8 +33,8 @@ func TestEntryFileGlobCharName(t *testing.T) {
 		t.Parallel()
 
 		proj, dir := transpile(t, "entry_file"), t.TempDir()
-		writeFileT(t, filepath.Join(dir, "s[1].txt"), "10\n")
-		writeFileT(t, filepath.Join(dir, "s1.txt"), "999\n")
+		writeTestFile(t, filepath.Join(dir, "s[1].txt"), "10\n")
+		writeTestFile(t, filepath.Join(dir, "s1.txt"), "999\n")
 		writeParams(t, proj, map[string]any{"reads": filepath.Join(dir, "s[1].txt")})
 
 		if err := runNextflow(t, proj, "-params-file", "params.json"); err != nil {
@@ -61,8 +61,8 @@ func TestEntryFileGlobCharName(t *testing.T) {
 	}{
 		{"glob_beside_match", "entry_file", "N0_COUNT", func(t *testing.T, dir string) any {
 			t.Helper()
-			writeFileT(t, filepath.Join(dir, "s[1].txt"), "10\n")
-			writeFileT(t, filepath.Join(dir, "s1.txt"), "999\n")
+			writeTestFile(t, filepath.Join(dir, "s[1].txt"), "10\n")
+			writeTestFile(t, filepath.Join(dir, "s1.txt"), "999\n")
 
 			return map[string]string{"reads": "file://" + filepath.Join(dir, "s[1].txt")}
 		}, "entry input 'reads': the path contains '['"},
@@ -83,7 +83,7 @@ func TestEntryFileGlobCharName(t *testing.T) {
 				t.Fatalf("marshal params: %v", err)
 			}
 
-			writeFileT(t, filepath.Join(proj, "params.json"), string(params))
+			writeTestFile(t, filepath.Join(proj, "params.json"), string(params))
 
 			if err := runNextflowAllowingFailedAttempts(t, proj, "-params-file", "params.json"); err == nil {
 				t.Fatal("an override naming a file Nextflow would mis-stage must fail the run")
@@ -174,7 +174,7 @@ func remoteReadsProject(t *testing.T, body []byte) (string, *atomic.Int32) {
 	t.Cleanup(srv.Close)
 
 	proj := transpile(t, "entry_file")
-	writeFileT(t, filepath.Join(proj, "params.json"), `{"reads": "`+srv.URL+`/override.txt"}`)
+	writeTestFile(t, filepath.Join(proj, "params.json"), `{"reads": "`+srv.URL+`/override.txt"}`)
 
 	return proj, &hits
 }

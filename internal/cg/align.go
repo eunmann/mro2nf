@@ -19,26 +19,51 @@ type ReadPattern struct {
 	When  map[string][]int  `json:"when,omitempty"`
 }
 
-// readPatterns are the ways st's instances read up's instances, one per
-// shape of the references to up in st's bindings, as an mrp job reads the
-// forks of up its specialized bindings name. A reference at the element of
-// a split over a root of st reads, of each root of up st is not forked on,
-// the fork at the element's own index where every reference to up under
-// that root does (an alignment: Martian expands a split over a map call's
-// outs into a literal of its forks, or a merge of them, in their order),
-// and every fork otherwise; it does so only at that element where the
-// split's elements do not all read up (When). It is nil where st reads every
-// instance of up under the roots they share.
-func (g *Graph) readPatterns(st *syntax.CallGraphStage, up string) []ReadPattern {
-	u, err := g.Stage(up)
+// readPatterns collects, as the binding walk visits a reader's bindings,
+// the ways its instances read each node's instances (Read.Patterns), one
+// per shape of the references to the node, as an mrp job reads the forks
+// of a node its specialized bindings name. A reference at the element of a
+// split over a root of the reader reads, of each root of the node the
+// reader is not forked on, the fork at the element's own index where every
+// reference to the node under that root does (an alignment: Martian expands
+// a split over a map call's outs into a literal of its forks, or a merge of
+// them, in their order), and every fork otherwise; it does so only at that
+// element where the split's elements do not all read the node (When).
+type readPatterns struct {
+	g      *Graph
+	reader syntax.ForkRootList
+	by     map[string]*aligner
+}
+
+func (g *Graph) readPatternsOf(st *syntax.CallGraphStage) *readPatterns {
+	return &readPatterns{g: g, reader: st.ForkRoots(), by: map[string]*aligner{}}
+}
+
+func (p *readPatterns) ref(ref *syntax.RefExp, ctx []splitCtx) {
+	a, ok := p.by[ref.Id]
+	if !ok {
+		a = p.aligner(ref.Id)
+		p.by[ref.Id] = a
+	}
+
+	if a != nil {
+		a.ref(ref, ctx)
+	}
+}
+
+// aligner is up's, nil where up is no stage or forked on no root the
+// reader is not, so that the reader reads every instance of it under the
+// roots they share.
+func (p *readPatterns) aligner(up string) *aligner {
+	u, err := p.g.Stage(up)
 	if err != nil {
 		return nil
 	}
 
-	a := aligner{g: g, reader: st.ForkRoots(), up: up, consistent: map[[2]string]bool{}}
+	a := &aligner{consistent: map[[2]string]bool{}}
 
 	for _, r := range u.ForkRoots() {
-		if !slices.ContainsFunc(a.reader, func(x *syntax.CallGraphStage) bool { return x.Fqid == r.Fqid }) {
+		if !slices.ContainsFunc(p.reader, func(x *syntax.CallGraphStage) bool { return x.Fqid == r.Fqid }) {
 			a.roots = append(a.roots, r)
 		}
 	}
@@ -47,177 +72,39 @@ func (g *Graph) readPatterns(st *syntax.CallGraphStage, up string) []ReadPattern
 		return nil
 	}
 
-	for _, e := range bindings(st) {
-		a.walk(e, nil)
-	}
-
-	return a.patterns()
+	return a
 }
 
-// alignCtx is an enclosing split over the reader root root, at its element
-// at idx, the ordinal ord of the n elements of the split's literal, or at
-// the merge of root merge's forks, whose elements no ordinal names.
-type alignCtx struct {
-	root  *syntax.CallGraphStage
-	idx   syntax.CollectionIndex
-	keys  map[string]syntax.Exp
-	ord   int
-	n     int
-	merge *syntax.CallGraphStage
+// of are the read patterns of node, nil where the reader reads every
+// instance of it under the roots they share.
+func (p *readPatterns) of(node string) []ReadPattern {
+	if a := p.by[node]; a != nil {
+		return a.patterns()
+	}
+
+	return nil
 }
 
 // occurrence is one reference to up and the splits enclosing it.
 type occurrence struct {
 	ref *syntax.RefExp
-	ctx []alignCtx
+	ctx []splitCtx
 }
 
 // aligner collects the references to up in a reader's bindings, and of each
-// root of up the reader is not forked on and each reader root, whether
-// every reference under a split over that reader root is at its element's
-// own index of up's root (consistent).
+// root of up the reader is not forked on, roots, and each reader root,
+// whether every reference under a split over that reader root is at its
+// element's own index of up's root (consistent).
 type aligner struct {
-	g          *Graph
-	reader     syntax.ForkRootList
-	up         string
 	roots      syntax.ForkRootList
 	occ        []occurrence
 	consistent map[[2]string]bool
 }
 
-func (a *aligner) readerRoot(call *syntax.CallStm) *syntax.CallGraphStage {
-	i := slices.IndexFunc(a.reader, func(r *syntax.CallGraphStage) bool { return r.Call() == call })
-	if i < 0 {
-		return nil
-	}
-
-	return a.reader[i]
-}
-
-// walk visits e under the enclosing splits ctx.
-func (a *aligner) walk(e syntax.Exp, ctx []alignCtx) {
-	switch x := e.(type) {
-	case *syntax.RefExp:
-		if x.Id == a.up {
-			a.ref(x, ctx)
-		}
-	case *syntax.SplitExp:
-		if r := a.readerRoot(x.Call); r != nil {
-			a.collection(r, x.Value, ctx)
-		} else {
-			a.walk(x.Value, ctx)
-		}
-	case *syntax.ArrayExp:
-		for _, v := range x.Value {
-			a.walk(v, ctx)
-		}
-	case *syntax.MapExp:
-		for _, k := range slices.Sorted(maps.Keys(x.Value)) {
-			a.walk(x.Value[k], ctx)
-		}
-	case *syntax.MergeExp:
-		if a.g.mergeGathersNone(x, a.reader) {
-			return
-		}
-
-		a.walk(x.Value, ctx)
-
-		if x.ForkNode != nil {
-			a.walk(x.ForkNode, ctx)
-		}
-
-		a.countReads(x, ctx)
-	case *syntax.DisabledExp:
-		a.walk(x.Disabled, ctx)
-		a.walk(x.Value, ctx)
-	}
-}
-
-// countReads visits what counting the forks the merge x gathers reads
-// (Graph.mergeCounted, Graph.countReads), each at the indices of the outer
-// roots the merge's constraint fixes, where the merge resolves it
-// (mergeIndices).
-func (a *aligner) countReads(x *syntax.MergeExp, ctx []alignCtx) {
-	root, ok := a.g.mergeCounted(x, a.reader)
-	if !ok {
-		return
-	}
-
-	constraint := mergeConstraint(x)
-
-	for _, r := range a.g.countReads(root) {
-		if r.Id != a.up {
-			continue
-		}
-
-		at := *r
-		at.Forks = maps.Clone(r.Forks)
-
-		if constraint != nil {
-			for c, ix := range constraint.Forks {
-				if ix != nil && ix.IndexSource() == nil {
-					if was, ok := at.Forks[c]; !ok || was == nil || was.IndexSource() != nil {
-						at.Forks[c] = ix
-					}
-				}
-			}
-		}
-
-		a.ref(&at, ctx)
-	}
-}
-
-// collection visits v, the collection a split over the reader root r
-// forks, element by element.
-func (a *aligner) collection(r *syntax.CallGraphStage, v syntax.Exp, ctx []alignCtx) {
-	switch x := v.(type) {
-	case *syntax.ArrayExp:
-		for i, el := range x.Value {
-			a.walk(el, append(slices.Clip(ctx), alignCtx{root: r, idx: ArrayIndex(i), ord: i, n: len(x.Value)}))
-		}
-	case *syntax.MapExp:
-		keys := slices.Sorted(maps.Keys(x.Value))
-		for i, k := range keys {
-			a.walk(x.Value[k], append(slices.Clip(ctx), alignCtx{root: r, idx: MapKey(k), keys: x.Value, ord: i, n: len(keys)}))
-		}
-	case *syntax.MergeExp:
-		a.walk(x.Value, append(slices.Clip(ctx), alignCtx{root: r, merge: x.Call}))
-	case *syntax.DisabledExp:
-		a.walk(x.Disabled, ctx)
-		a.collection(r, x.Value, ctx)
-	case *syntax.SplitExp:
-		if o := a.readerRoot(x.Call); o != nil {
-			a.nested(r, o, x.Value, ctx)
-		} else {
-			a.walk(x, ctx)
-		}
-	default:
-		a.walk(v, ctx)
-	}
-}
-
-// nested visits v, a collection of r's collections, one per fork of the
-// reader root o.
-func (a *aligner) nested(r, o *syntax.CallGraphStage, v syntax.Exp, ctx []alignCtx) {
-	switch x := v.(type) {
-	case *syntax.ArrayExp:
-		for i, el := range x.Value {
-			a.collection(r, el, append(slices.Clip(ctx), alignCtx{root: o, idx: ArrayIndex(i), ord: i, n: len(x.Value)}))
-		}
-	case *syntax.MapExp:
-		keys := slices.Sorted(maps.Keys(x.Value))
-		for i, k := range keys {
-			a.collection(r, x.Value[k], append(slices.Clip(ctx), alignCtx{root: o, idx: MapKey(k), keys: x.Value, ord: i, n: len(keys)}))
-		}
-	default:
-		a.walk(v, ctx)
-	}
-}
-
 // ref records a reference to up, and of each pair of up's root and an
 // enclosing split's reader root whether the reference is at the element's
 // own index of up's root.
-func (a *aligner) ref(ref *syntax.RefExp, ctx []alignCtx) {
+func (a *aligner) ref(ref *syntax.RefExp, ctx []splitCtx) {
 	a.occ = append(a.occ, occurrence{ref: ref, ctx: ctx})
 
 	for _, s := range a.roots {
@@ -233,7 +120,7 @@ func (a *aligner) ref(ref *syntax.RefExp, ctx []alignCtx) {
 // atOwnIndex reports whether ref reads root s's fork at the index of its
 // element of the enclosing split c: the element's own index, its key being
 // one of s's own keys, or, in a merge of s's forks, the fork it merges.
-func atOwnIndex(ref *syntax.RefExp, s *syntax.CallGraphStage, c alignCtx) bool {
+func atOwnIndex(ref *syntax.RefExp, s *syntax.CallGraphStage, c splitCtx) bool {
 	ix := ref.Forks[s.Call()]
 	unresolved := ix == nil || ix.IndexSource() != nil
 

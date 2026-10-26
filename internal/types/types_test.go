@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -83,27 +84,6 @@ func newTable(t *testing.T) *types.Table {
 	return types.NewTable(&compile(t, typesSrc).TypeTable)
 }
 
-// fields declares each "name type" pair, the type as an .mro spells it, as a
-// member of the object the walk descends.
-func fields(t *testing.T, decls ...string) []*syntax.StructMember {
-	t.Helper()
-
-	out := make([]*syntax.StructMember, len(decls))
-
-	for i, d := range decls {
-		name, tname, _ := strings.Cut(d, " ")
-
-		var id syntax.TypeId
-		if err := id.UnmarshalText([]byte(tname)); err != nil {
-			t.Fatalf("type of %s: %v", d, err)
-		}
-
-		out[i] = &syntax.StructMember{Id: name, Tname: id}
-	}
-
-	return out
-}
-
 // upper rewrites a path to its uppercase form, so tests can assert exactly which
 // leaves the walk reached.
 func upper(s string) (string, error) { return strings.ToUpper(s), nil }
@@ -137,7 +117,7 @@ func TestApplySkipLeaf(t *testing.T) {
 
 	vals := map[string]any{"a": "skipme", "b": "keep"}
 
-	got, err := newTable(t).Apply(fields(t, "a file", "b file"), vals, fn)
+	got, err := newTable(t).Apply(typestest.Fields(t, "a file", "b file"), vals, fn)
 	if err != nil {
 		t.Fatalf("ErrSkipLeaf must not abort the walk: %v", err)
 	}
@@ -202,7 +182,7 @@ func TestApplyLeafShapes(t *testing.T) {
 	for _, tc := range leafShapeCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			fn, seen := collector()
-			ps := fields(t, tc.decl)
+			ps := typestest.Fields(t, tc.decl)
 
 			if _, err := tbl.Apply(ps, map[string]any{ps[0].Id: tc.val}, fn); err != nil {
 				t.Fatalf("Apply: %v", err)
@@ -253,7 +233,7 @@ func TestApplyRewrites(t *testing.T) {
 		"keep": "untouched",
 	}
 
-	got, err := newTable(t).Apply(fields(t, "o Outer"), vals, upper)
+	got, err := newTable(t).Apply(typestest.Fields(t, "o Outer"), vals, upper)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -276,7 +256,7 @@ func TestApplyRewrites(t *testing.T) {
 func TestApplyMapDeterministic(t *testing.T) {
 	tbl := newTable(t)
 	vals := map[string]any{"m": map[string]any{"z": "zf", "a": "af", "m": "mf"}}
-	ps := fields(t, "m map<file>")
+	ps := typestest.Fields(t, "m map<file>")
 
 	for range 5 {
 		fn, seen := collector()
@@ -295,7 +275,7 @@ func TestApplyMapDeterministic(t *testing.T) {
 func TestApplyUnknownKeysPreserved(t *testing.T) {
 	vals := map[string]any{"declared": "a.txt", "extra": json.Number("9")}
 
-	got, err := newTable(t).Apply(fields(t, "declared file"), vals, upper)
+	got, err := newTable(t).Apply(typestest.Fields(t, "declared file"), vals, upper)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -325,7 +305,7 @@ func TestWalkShapeMismatchPassthrough(t *testing.T) {
 		"mapAsArr":    map[string]any{"k": "v"},
 		"arrAsMap":    []any{"v"},
 	}
-	ps := fields(t, "arrAsScalar txt", "numAsFile txt", "mapAsFile txt", "scalarAsArr file[]", "mapAsArr file[]", "arrAsMap map<file>")
+	ps := typestest.Fields(t, "arrAsScalar txt", "numAsFile txt", "mapAsFile txt", "scalarAsArr file[]", "mapAsArr file[]", "arrAsMap map<file>")
 
 	got, err := newTable(t).Apply(ps, vals, fn)
 	if err != nil {
@@ -349,7 +329,7 @@ func TestHasFiles(t *testing.T) {
 
 	got := map[string]bool{}
 
-	for _, p := range fields(t, "a int", "b string", "c map", "d bool", "e float[]", "f map<int>", "g Notes", "h Num[]",
+	for _, p := range typestest.Fields(t, "a int", "b string", "c map", "d bool", "e float[]", "f map<int>", "g Notes", "h Num[]",
 		"i file", "j path", "k txt", "l txt[][]", "m map<bam>", "n Cfg", "o Outer[]", "p map<Cfg[]>") {
 		has, err := tbl.HasFiles(p.Tname)
 		if err != nil {
@@ -367,7 +347,7 @@ func TestHasFiles(t *testing.T) {
 		t.Errorf("HasFiles (-want +got):\n%s", diff)
 	}
 
-	if _, err := tbl.HasFiles(fields(t, "x nosuch")[0].Tname); !errors.Is(err, types.ErrUnknownType) {
+	if _, err := tbl.HasFiles(typestest.Fields(t, "x nosuch")[0].Tname); !errors.Is(err, types.ErrUnknownType) {
 		t.Errorf("HasFiles of an unknown type = %v, want %v", err, types.ErrUnknownType)
 	}
 }
@@ -376,7 +356,7 @@ func TestHasFiles(t *testing.T) {
 // walk loudly instead of passing its file leaves through unstaged.
 func TestUnknownType(t *testing.T) {
 	tbl := newTable(t)
-	ps := fields(t, "x nosuch")
+	ps := typestest.Fields(t, "x nosuch")
 
 	if _, err := tbl.Apply(ps, map[string]any{"x": "a"}, upper); !errors.Is(err, types.ErrUnknownType) {
 		t.Errorf("Apply = %v, want %v", err, types.ErrUnknownType)

@@ -233,10 +233,10 @@ func TestRetryRequestsTheSameResources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeFileT(t, filepath.Join(dir, "pipeline.mro"), fmt.Sprintf(retryMRO, filepath.Join(dir, "marker")))
-	writeFileT(t, filepath.Join(dir, "stages", "once", "__init__.py"), retryOnce)
-	writeFileT(t, filepath.Join(dir, "overrides.json"), `{"ONCE": {"chunk.threads": 2, "chunk.mem_gb": 2}}`)
-	writeFileT(t, filepath.Join(dir, "trace.config"), "trace.fields = 'name,status,exit,attempt,cpus,memory'\n")
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), fmt.Sprintf(retryMRO, filepath.Join(dir, "marker")))
+	writeTestFile(t, filepath.Join(dir, "stages", "once", "__init__.py"), retryOnce)
+	writeTestFile(t, filepath.Join(dir, "overrides.json"), `{"ONCE": {"chunk.threads": 2, "chunk.mem_gb": 2}}`)
+	writeTestFile(t, filepath.Join(dir, "trace.config"), "trace.fields = 'name,status,exit,attempt,cpus,memory'\n")
 
 	proj := transpileDir(t, dir)
 	if err := runNextflowAllowingFailedAttempts(t, proj, "-c", filepath.Join(dir, "trace.config"),

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -33,7 +34,7 @@ func TestSkeletonIsTheBundleWithoutBytes(t *testing.T) {
 
 	bundle := filepath.Join(dir, "bundle")
 	writeFileAt(t, filepath.Join(bundle, "instance.json"), `{"node":"N"}`)
-	writeBundle(t, bundle, map[string]any{"f": leaf, "d": tree}, fields(t, "f file", "d file"), shim.Opts{})
+	writeBundle(t, bundle, map[string]any{"f": leaf, "d": tree}, typestest.Fields(t, "f file", "d file"), shim.Opts{})
 
 	expanded := filepath.Join(dir, "expanded")
 	if err := shim.ExpandSkeleton(filepath.Join(bundle, shim.SkeletonFile), expanded); err != nil {

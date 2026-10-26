@@ -14,20 +14,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func writeABITestFile(t *testing.T, path, content string) string {
-	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	return path
-}
-
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 
@@ -100,9 +86,9 @@ func TestABINormalizeRejectsMalformed(t *testing.T) {
 func TestABINormalizePaths(t *testing.T) {
 	dir := t.TempDir()
 	own := filepath.Join(dir, "chnk0", "files")
-	file := writeABITestFile(t, filepath.Join(dir, "up", "reads.txt"), "ACGT")
-	writeABITestFile(t, filepath.Join(dir, "tree", "a.txt"), "x")
-	ownFile := writeABITestFile(t, filepath.Join(own, "out.bam"), "BAM")
+	file := writeTestFile(t, filepath.Join(dir, "up", "reads.txt"), "ACGT")
+	writeTestFile(t, filepath.Join(dir, "tree", "a.txt"), "x")
+	ownFile := writeTestFile(t, filepath.Join(own, "out.bam"), "BAM")
 
 	link := filepath.Join(dir, "staged", "link.txt")
 	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
@@ -150,9 +136,9 @@ func TestABINormalizePaths(t *testing.T) {
 // the same bytes under different host dirs normalize equal, and that a content
 // difference does not.
 func TestABINormalizeSameContentAcrossHosts(t *testing.T) {
-	mrpFile := writeABITestFile(t, filepath.Join(t.TempDir(), "ps", "files", "ref.bin"), "data")
-	nfFile := writeABITestFile(t, filepath.Join(t.TempDir(), "work", "ab", "ref.bin"), "data")
-	other := writeABITestFile(t, filepath.Join(t.TempDir(), "ref.bin"), "different")
+	mrpFile := writeTestFile(t, filepath.Join(t.TempDir(), "ps", "files", "ref.bin"), "data")
+	nfFile := writeTestFile(t, filepath.Join(t.TempDir(), "work", "ab", "ref.bin"), "data")
+	other := writeTestFile(t, filepath.Join(t.TempDir(), "ref.bin"), "different")
 
 	norm := func(p string) string {
 		got, err := abiNormalizer{}.normalize([]byte(`{"ref": "` + p + `"}`))
@@ -178,7 +164,7 @@ func TestHashDirTree(t *testing.T) {
 
 		dir := t.TempDir()
 		for rel, content := range files {
-			writeABITestFile(t, filepath.Join(dir, rel), content)
+			writeTestFile(t, filepath.Join(dir, rel), content)
 		}
 
 		for _, d := range emptyDirs {
@@ -425,7 +411,7 @@ func TestMrpStageName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fork := t.TempDir()
-			writeABITestFile(t, filepath.Join(fork, "_invocation"), tc.src)
+			writeTestFile(t, filepath.Join(fork, "_invocation"), tc.src)
 
 			got, err := mrpStageName(fork)
 			if err != nil {
@@ -444,9 +430,10 @@ func TestMrpStageName(t *testing.T) {
 // pipestance source's call graph.
 func TestMrpStageNameEmptyInvocation(t *testing.T) {
 	ps := t.TempDir()
-	writeABITestFile(t, filepath.Join(ps, "_mrosource"), "stage PAIR(\n    in  int a,\n    out int b,\n    src py \"p\",\n)\n\n"+
+	writeTestFile(t, filepath.Join(ps, "_mrosource"), "stage PAIR(\n    in  int a,\n    out int b,\n    src py \"p\",\n)\n\n"+
 		"pipeline Z(\n    out int b,\n)\n{\n    call PAIR as NULL_OTHER(\n        a = 1,\n    )\n\n    return (\n        b = NULL_OTHER.b,\n    )\n}\n\ncall Z()\n")
-	writeABITestFile(t, filepath.Join(ps, "Z", "NULL_OTHER", "fork0", "_invocation"), "")
+
+	writeTestFile(t, filepath.Join(ps, "Z", "NULL_OTHER", "fork0", "_invocation"), "")
 
 	if got, err := mrpStageName(filepath.Join(ps, "Z", "NULL_OTHER", "fork0")); err != nil || got != "PAIR" {
 		t.Errorf("mrpStageName = %q, %v, want PAIR", got, err)
@@ -459,11 +446,11 @@ func TestCollectNextflowInvocations(t *testing.T) {
 	proj := t.TempDir()
 	task := func(hash, exit, phase, stage string) {
 		dir := filepath.Join(proj, "work", "ab", hash)
-		writeABITestFile(t, filepath.Join(dir, ".exitcode"), exit)
-		writeABITestFile(t, filepath.Join(dir, phase, mreStageFile), stage)
-		writeABITestFile(t, filepath.Join(dir, phase, argsFile), `{"n": 3}`)
-		writeABITestFile(t, filepath.Join(dir, phase, outsFile), `{"total": 6}`)
-		writeABITestFile(t, filepath.Join(dir, phase, jobInfoFile), `{"memGB": 1, "threads": 1, "vmemGB": 4}`)
+		writeTestFile(t, filepath.Join(dir, ".exitcode"), exit)
+		writeTestFile(t, filepath.Join(dir, phase, mreStageFile), stage)
+		writeTestFile(t, filepath.Join(dir, phase, argsFile), `{"n": 3}`)
+		writeTestFile(t, filepath.Join(dir, phase, outsFile), `{"total": 6}`)
+		writeTestFile(t, filepath.Join(dir, phase, jobInfoFile), `{"memGB": 1, "threads": 1, "vmemGB": 4}`)
 	}
 
 	task("ok1", "0", phaseMain, "SUM")
@@ -593,15 +580,15 @@ func writeABIPairJobInfo(t *testing.T, mrpArgs, nfArgs, mrpInfo, nfInfo string) 
 	chunk := filepath.Join(fork, "chnk0-u1c28cb18e6")
 	task := filepath.Join(p.proj, "work", "ab", "cdef1234")
 
-	writeABITestFile(t, filepath.Join(fork, "_invocation"), "call CONS(\n    s = PROD.s,\n)\n")
-	writeABITestFile(t, filepath.Join(chunk, jobInfoFile), mrpInfo)
-	writeABITestFile(t, filepath.Join(chunk, argsFile), mrpArgs)
-	writeABITestFile(t, filepath.Join(chunk, outsFile), `{"keys": ["b", "a"]}`)
-	writeABITestFile(t, filepath.Join(task, ".exitcode"), "0")
-	writeABITestFile(t, filepath.Join(task, phaseMain, mreStageFile), "CONS")
-	writeABITestFile(t, filepath.Join(task, phaseMain, jobInfoFile), nfInfo)
-	writeABITestFile(t, filepath.Join(task, phaseMain, argsFile), nfArgs)
-	writeABITestFile(t, filepath.Join(task, phaseMain, outsFile), `{"keys":["b","a"]}`)
+	writeTestFile(t, filepath.Join(fork, "_invocation"), "call CONS(\n    s = PROD.s,\n)\n")
+	writeTestFile(t, filepath.Join(chunk, jobInfoFile), mrpInfo)
+	writeTestFile(t, filepath.Join(chunk, argsFile), mrpArgs)
+	writeTestFile(t, filepath.Join(chunk, outsFile), `{"keys": ["b", "a"]}`)
+	writeTestFile(t, filepath.Join(task, ".exitcode"), "0")
+	writeTestFile(t, filepath.Join(task, phaseMain, mreStageFile), "CONS")
+	writeTestFile(t, filepath.Join(task, phaseMain, jobInfoFile), nfInfo)
+	writeTestFile(t, filepath.Join(task, phaseMain, argsFile), nfArgs)
+	writeTestFile(t, filepath.Join(task, phaseMain, outsFile), `{"keys":["b","a"]}`)
 
 	return p
 }

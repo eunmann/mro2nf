@@ -121,7 +121,7 @@ func TestMrpDiffHostEntryPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeFileT(t, mro, strings.ReplaceAll(string(src), `"input/`, `"`+input+`/`))
+	writeTestFile(t, mro, strings.ReplaceAll(string(src), `"input/`, `"`+input+`/`))
 
 	tmp := t.TempDir()
 	runMrpAt(t, bin, dir, "pipeline.mro", tmp)
@@ -214,7 +214,7 @@ func TestMrpDiffPublishesHostEntryFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		writeFileT(t, path, body)
+		writeTestFile(t, path, body)
 	}
 
 	tmp := t.TempDir()
@@ -373,7 +373,7 @@ func writeParams(t *testing.T, proj string, params map[string]any) {
 		t.Fatal(err)
 	}
 
-	writeFileT(t, filepath.Join(proj, "params.json"), string(raw))
+	writeTestFile(t, filepath.Join(proj, "params.json"), string(raw))
 }
 
 // dockerMountArgs writes proj's configs for a run of its docker profile in
@@ -383,7 +383,7 @@ func dockerMountArgs(t *testing.T, proj, image, s3 string) []string {
 	t.Helper()
 
 	writeCloudConfig(t, proj)
-	writeFileT(t, filepath.Join(proj, "iso.config"), dockerProfileConfig()+"docker.runOptions = '"+readOnlyBind(s3)+"'\n")
+	writeTestFile(t, filepath.Join(proj, "iso.config"), dockerProfileConfig()+"docker.runOptions = '"+readOnlyBind(s3)+"'\n")
 
 	return []string{"-profile", "docker", "-c", "iso.config", "-c", "cloud.config", "--mro2nf_image", image, "-params-file", "params.json"}
 }
