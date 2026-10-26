@@ -42,12 +42,17 @@ roots, of any invocation.
 
 Where `mrp` refuses the witness, the inputs start from the literal invocation,
 and each in turn takes its witness value only while `mrp` still accepts the
-call; a panic of Martian's call-graph builder counts as a refusal. `TestWitnessCoversLiteral` checks that every
-fixture's literal invocation is within its witness's.
+call; a panic of Martian's call-graph builder counts as a refusal.
 
-At run time PLAN checks the real invocation against the witness
-(`Topology.Covers`): a node, fork root or read the witness lacks fails the run
-before any stage starts ([Run time](runtime.md#plan)).
+The transpile refuses a `.mro` whose own invocation is not within its
+witness's (`Source.CoversLiteral`), and at run time PLAN checks the real
+invocation the same way (`Topology.Covers`): a node, fork root or read the
+witness lacks fails before any stage starts ([Run time](runtime.md#plan)). A
+read is within the witness's when the witness's read patterns give every
+instance it reads, at the invocation's fork counts: Martian expands an entry
+collection into a literal of its width, and at one fork an alignment selects
+what a limit to ordinal 0 does. The witness's own patterns don't depend on its
+width (`mergePatterns`). Some invocations remain outside the witness (#621).
 
 ## The topology
 

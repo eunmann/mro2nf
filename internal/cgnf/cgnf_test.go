@@ -743,6 +743,42 @@ func TestEmitRefusesReservedParam(t *testing.T) {
 	}
 }
 
+// TestEmitRefusesAnUncoveredLiteral (#621): a .mro whose own invocation's
+// call graph is not within its witness's, here a null source that makes a
+// gate fix a map call's forks, fails the transpile, not the project's
+// first PLAN, and emits nothing.
+func TestEmitRefusesAnUncoveredLiteral(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "rt_gate_split", "pipeline.mro"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decls, _, ok := strings.Cut(string(raw), "call RTG(")
+	if !ok {
+		t.Fatal("rt_gate_split has no call of RTG")
+	}
+
+	src := decls + "call RTG(\n    some = null,\n    skip = false,\n)\n"
+
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+
+	if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "proj")
+	want := "the call of pipeline.mro: the invocation's call graph is not within the transpiled one"
+
+	if err := Emit(mro, Options{OutDir: out, MroPaths: []string{dir}}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Emit = %v, want an error containing %q", err, want)
+	}
+
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused emit left %s (stat: %v)", out, err)
+	}
+}
+
 // TestEmitRefusesKeywordInput (#585): an entry input named with a word
 // Nextflow's params block refuses, a keyword of its lexer (def) or a Groovy
 // keyword its parser refuses (class, volatile, which Martian lexes as its

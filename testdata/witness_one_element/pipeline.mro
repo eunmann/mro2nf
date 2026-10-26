@@ -1,0 +1,50 @@
+# #621 (b): map_chain_partial (#601) with one sample of one element. Every
+# fork index Martian expands is 0, so SUM's read of SQ also reads as aligned
+# with SUM's own fork, which the witness's read covers.
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+stage SUM(
+    in  int[] vs,
+    out int   s,
+    src py    "stages/sum",
+)
+
+pipeline INNER(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call SQ(
+        x = split self.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    in  int[][] xss,
+    out int[]   ss,
+)
+{
+    map call INNER(
+        xs = split self.xss,
+    )
+
+    map call SUM(
+        vs = split INNER.ys,
+    )
+
+    return (
+        ss = SUM.s,
+    )
+}
+
+call TOP(
+    xss = [[5]],
+)

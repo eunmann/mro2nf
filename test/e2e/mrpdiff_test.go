@@ -634,6 +634,13 @@ var mrpDiffCases = []mrpDiffCase{
 	// #601: a merge's fork count read from a stage inside the merged
 	// pipeline's own fork.
 	{name: "map_chain_counted"},
+	// #621: a literal Martian expands from an entry collection, read alike
+	// at every width.
+	{name: "witness_merged_literal"},
+	// #621: reads that look aligned at a root of one fork, which the
+	// witness's reads of every fork cover.
+	{name: "witness_one_element"},
+	{name: "witness_one_fork_read"},
 	// Two partner splits of one projected output inside a mapped
 	// sub-pipeline, their references leaving the outer index unresolved
 	// (gen-diff seed 862's witness).

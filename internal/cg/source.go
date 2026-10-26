@@ -232,6 +232,28 @@ func (s Source) Witness(mroPaths []string) (*Graph, error) {
 	return s.compileArgs(args, mroPaths)
 }
 
+// CoversLiteral checks that t, the topology of the source's witness, covers
+// the call graph of the source's own invocation, so a project fails its
+// transpile, not its first run, where it cannot run the invocation it was
+// transpiled from.
+func (s Source) CoversLiteral(t Topology, mroPaths []string) error {
+	g, err := s.compileArgs(s.Invocation.Args, mroPaths)
+	if err != nil {
+		return err
+	}
+
+	lt, err := g.Topology()
+	if err != nil {
+		return err
+	}
+
+	if err := t.Covers(lt); err != nil {
+		return fmt.Errorf("the call of %s: %w", s.Name, err)
+	}
+
+	return nil
+}
+
 // Path is the entry file's path, which the source compiles as.
 func (s Source) Path() string {
 	return filepath.Join(s.Dir, s.Name)

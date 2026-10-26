@@ -178,6 +178,10 @@ func newProject(src cg.Source, opts Options) (*project, error) {
 		return nil, fmt.Errorf("emit: %w", err)
 	}
 
+	if err := src.CoversLiteral(topo, opts.MroPaths); err != nil {
+		return nil, fmt.Errorf("emit: %w", err)
+	}
+
 	for _, id := range slices.Sorted(maps.Keys(src.Invocation.Args)) {
 		switch {
 		case reserved(id):

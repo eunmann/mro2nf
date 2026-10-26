@@ -269,7 +269,7 @@ func (a *aligner) patterns() []ReadPattern {
 		}
 
 		for i, c := range o.ctx {
-			if !used[i] && c.merge == nil {
+			if !used[i] && c.merge == nil && c.n > 1 {
 				p.when[c.root.Fqid] = []int{c.ord}
 				p.n[c.root.Fqid] = c.n
 			}
@@ -315,7 +315,9 @@ func (p readPattern) exported() ReadPattern {
 
 // mergePatterns merges, until none do, the patterns that differ only in the
 // elements of one root they are limited to, and drops a limit that comes to
-// every element of its split.
+// every element of its split and a pattern another covers, so the patterns
+// of a literal Martian expanded from an entry collection are the same at
+// every width.
 func mergePatterns(ps []readPattern) []readPattern {
 	for merged := true; merged; {
 		merged = false
@@ -331,7 +333,41 @@ func mergePatterns(ps []readPattern) []readPattern {
 		}
 	}
 
-	return ps
+	// No two patterns left are equal, so none covers another but a wider one.
+	var out []readPattern
+
+	for _, q := range ps {
+		wq := q.exported()
+		if !slices.ContainsFunc(ps, func(p readPattern) bool {
+			wp := p.exported()
+
+			return !samePattern(wp, wq) && wp.covers(wq)
+		}) {
+			out = append(out, q)
+		}
+	}
+
+	return out
+}
+
+// covers reports whether p reads, of every reader instance q reads at, at
+// least the instances q does: p aligns no root q does not, at the same
+// reader root, and limits no root to elements q is not limited within.
+func (p ReadPattern) covers(q ReadPattern) bool {
+	for u, r := range p.Align {
+		if q.Align[u] != r {
+			return false
+		}
+	}
+
+	for r, ords := range p.When {
+		qs, ok := q.When[r]
+		if !ok || slices.ContainsFunc(qs, func(o int) bool { return !slices.Contains(ords, o) }) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // mergeable reports whether p and q differ only in the elements of one

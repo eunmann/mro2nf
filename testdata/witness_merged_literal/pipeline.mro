@@ -1,0 +1,58 @@
+# #621 (c), gen seed 1890 shrunk: SCALE maps over a literal inside a mapped
+# sub-pipeline that forks it on nothing else, and COUNT maps over the
+# sub-pipeline's merged SCALE outs. Martian expands that merge into a
+# literal as long as the entry's samples, each element reading every SCALE
+# fork; the read pattern must not depend on that length (the witness has 2).
+stage SCALE(
+    in  int   x,
+    out int[] ys,
+    src py    "stages/scale",
+)
+
+stage COUNT(
+    in  int[][] yss,
+    out int     n,
+    src py      "stages/count",
+)
+
+pipeline PER_SAMPLE(
+    in  string name,
+    out string name_out,
+    out SCALE[] scaled,
+)
+{
+    map call SCALE(
+        x = split [1, 2],
+    )
+
+    return (
+        name_out = self.name,
+        scaled   = SCALE,
+    )
+}
+
+pipeline TOP(
+    in  string[] names,
+    out int[]    ns,
+)
+{
+    map call PER_SAMPLE(
+        name = split self.names,
+    )
+
+    map call COUNT(
+        yss = split PER_SAMPLE.scaled.ys,
+    )
+
+    return (
+        ns = COUNT.n,
+    )
+}
+
+call TOP(
+    names = [
+        "a",
+        "b",
+        "c",
+    ],
+)

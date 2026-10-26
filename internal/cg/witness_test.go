@@ -70,22 +70,7 @@ func checkCovered(src Source, dir string) error {
 		return err
 	}
 
-	lsrc, err := src.Rebuild(src.Invocation, []string{dir})
-	if err != nil {
-		return err
-	}
-
-	lit, err := Compile([]byte(lsrc), src.Name, []string{dir})
-	if err != nil {
-		return err
-	}
-
-	lt, err := lit.Topology()
-	if err != nil {
-		return err
-	}
-
-	return wt.Covers(lt)
+	return src.CoversLiteral(wt, []string{dir})
 }
 
 // TestCoversRefuses: a call graph with a node, a read or a fork root the
