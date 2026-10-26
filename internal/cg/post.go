@@ -275,7 +275,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	switch {
 	case err != nil:
 	case values:
-		idx = c.indices()
+		idx = c.indices
 	default:
 		idx, err = w.r.sourceIndices(root, outer)
 	}

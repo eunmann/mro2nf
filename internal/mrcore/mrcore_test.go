@@ -568,6 +568,40 @@ func TestFailuresAreLoud(t *testing.T) {
 	}
 }
 
+// TestForkRange: a stage output's forks are core's expandForkFromObj range
+// of it: none for null or empty, an array's indices, a map's keys sorted;
+// a value of the wrong shape or an unknown mode fails.
+func TestForkRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode syntax.CallMode
+		obj  json.Marshaler
+		want []syntax.CollectionIndex
+		fail bool
+	}{
+		{name: "nil", mode: syntax.ModeArrayCall},
+		{name: "null array", mode: syntax.ModeArrayCall, obj: json.RawMessage("null"), want: []syntax.CollectionIndex{}},
+		{name: "null map", mode: syntax.ModeMapCall, obj: json.RawMessage("null"), want: []syntax.CollectionIndex{}},
+		{name: "empty array", mode: syntax.ModeArrayCall, obj: json.RawMessage("[]"), want: []syntax.CollectionIndex{}},
+		{name: "array", mode: syntax.ModeArrayCall, obj: json.RawMessage(`[5, null, {"a": 1}]`), want: []syntax.CollectionIndex{arrayIndexFork(0), arrayIndexFork(1), arrayIndexFork(2)}},
+		{name: "map", mode: syntax.ModeMapCall, obj: json.RawMessage(`{"b": 1, "a": 2, "c d": 3}`), want: []syntax.CollectionIndex{mapKeyFork("a"), mapKeyFork("b"), mapKeyFork("c d")}},
+		{name: "map as array", mode: syntax.ModeArrayCall, obj: json.RawMessage(`{"a": 1}`), fail: true},
+		{name: "array as map", mode: syntax.ModeMapCall, obj: json.RawMessage(`[1, 2]`), fail: true},
+		{name: "single mode", mode: syntax.ModeSingleCall, obj: json.RawMessage(`[1]`), fail: true},
+	} {
+		got, err := ForkRange(tc.mode, tc.obj)
+		if (err != nil) != tc.fail {
+			t.Errorf("%s: ForkRange error %v, want failure %t", tc.name, err, tc.fail)
+
+			continue
+		}
+
+		if d := cmp.Diff(tc.want, got); d != "" {
+			t.Errorf("%s: ForkRange (-want +got):\n%s", tc.name, d)
+		}
+	}
+}
+
 func TestOnlyMissing(t *testing.T) {
 	missing := &elementError{element: "array index 3", inner: ErrNoElement}
 	other := &elementError{element: "stage X"}

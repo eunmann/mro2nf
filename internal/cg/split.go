@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
-	"sort"
 
 	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -116,10 +113,13 @@ type indexed struct {
 	null bool
 	arr  []json.RawMessage
 	m    map[string]json.RawMessage
+	// indices are the collection's fork indices in mrp's order.
+	indices []syntax.CollectionIndex
 }
 
 // indexedOf decodes v as the collection a split of mode forks over: an
-// array, or a map for a map call.
+// array, or a map for a map call. Its indices are those core ranges a fork
+// over it by (mrcore.ForkRange).
 func indexedOf(v json.Marshaler, mode syntax.CallMode) (indexed, error) {
 	raw, err := marshal(v)
 	if err != nil {
@@ -140,20 +140,20 @@ func indexedOf(v json.Marshaler, mode syntax.CallMode) (indexed, error) {
 		}
 	}
 
-	return c, nil
-}
-
-// indices are the collection's fork indices in mrp's order; null and empty
-// have none (core/fork.go:1657-1790 expandForkFromObj).
-func (c indexed) indices() []syntax.CollectionIndex {
-	switch {
-	case c.null:
-		return nil
-	case c.mode == syntax.ModeMapCall:
-		return mapIndices(slices.Collect(maps.Keys(c.m)))
-	default:
-		return arrayIndices(len(c.arr))
+	var obj json.Marshaler
+	if v != nil {
+		obj = raw
 	}
+
+	if c.indices, err = mrcore.ForkRange(mode, obj); err != nil {
+		return indexed{}, fmt.Errorf("fork range: %w", err)
+	}
+
+	for i, ix := range c.indices {
+		c.indices[i] = concrete(ix)
+	}
+
+	return c, nil
 }
 
 // at is the element at ix (core/resolve.go getElement, getArrayElement,
@@ -255,24 +255,4 @@ func (r *resolver) sourceExp(root *syntax.CallGraphStage, outer Fork) (*syntax.S
 	}
 
 	return s, nil
-}
-
-func arrayIndices(n int) []syntax.CollectionIndex {
-	idx := make([]syntax.CollectionIndex, n)
-	for i := range idx {
-		idx[i] = ArrayIndex(i)
-	}
-
-	return idx
-}
-
-func mapIndices(keys []string) []syntax.CollectionIndex {
-	sort.Strings(keys)
-
-	idx := make([]syntax.CollectionIndex, len(keys))
-	for i, k := range keys {
-		idx[i] = MapKey(k)
-	}
-
-	return idx
 }

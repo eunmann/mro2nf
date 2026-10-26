@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -17,7 +18,52 @@ var (
 	ErrInvalidOuts = errors.New("invalid outs")
 
 	errOtherKey = errors.New("not the fork's own key")
+	errForkMode = errors.New("invalid fork mode")
 )
+
+// ForkRange lists the indices of the forks a split of mode expands from
+// obj, the value of a stage output, as core's expandForkFromObj ranges them
+// (fork.go:1657): none for null, an array's in order, a map's keys sorted.
+// It omits core's check of obj's length against a source of known length:
+// core expands only a source of unknown length from a stage's outs
+// (Fork.expand), and a split zipped with a literal of known length reads its
+// output element by element, null past its end (zip_literal).
+func ForkRange(mode syntax.CallMode, obj json.Marshaler) ([]syntax.CollectionIndex, error) {
+	if obj == nil {
+		return nil, nil
+	}
+
+	switch mode {
+	case syntax.ModeArrayCall:
+		n, err := getUnknownLength(obj)
+		if err != nil {
+			return nil, err
+		}
+
+		idx := make([]syntax.CollectionIndex, n)
+		for j := range idx {
+			idx[j] = arrayIndexFork(j)
+		}
+
+		return idx, nil
+	case syntax.ModeMapCall:
+		keys, err := getUnknownKeys(obj)
+		if err != nil {
+			return nil, err
+		}
+
+		sort.Strings(keys)
+
+		idx := make([]syntax.CollectionIndex, len(keys))
+		for j, k := range keys {
+			idx[j] = mapKeyFork(k)
+		}
+
+		return idx, nil
+	default:
+		return nil, fmt.Errorf("%w %s", errForkMode, mode.String())
+	}
+}
 
 // Part is the fork id part of root at index ix.
 func Part(root *syntax.CallGraphStage, ix syntax.CollectionIndex) *ForkSourcePart {
