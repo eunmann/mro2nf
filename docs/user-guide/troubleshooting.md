@@ -91,8 +91,9 @@ the same files `mrp` writes for the job.
   which the tasks stage if their role may read the bucket`**: on `awsbatch`, the input is a path under
   `/mnt/s3` whose bucket is not mounted. Deploy the stack with the bucket in
   `mountBuckets`, or pass its `s3://` URI on a compute environment whose
-  instance role may read the bucket: the example stack's may read only the
-  buckets it mounts.
+  tasks' role (the job role, or the instance role if the run names none) may
+  read the bucket: the example stack's roles may read only the buckets it
+  mounts.
 - **`entry input '<name>' names no object under the mounted bucket
   <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
 
