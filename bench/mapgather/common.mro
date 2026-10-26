@@ -1,0 +1,70 @@
+filetype txt;
+
+# Benchmark: a map call B reading another map call A's files both at its
+# own fork and whole (#622), `f = split A.f` beside `all = A.f`. The whole
+# read covers the aligned one, so each B task stages every A file once, as
+# its mrp job reads them all, through the one gather of A's outs every B
+# instance shares, never a group of its own. The lanes cover each form
+# Martian compiles B's split to: a literal of A's forks for an A over an
+# entry array (LIT), and a merge of them for an A over a stage's outs
+# (RUN). Run at two widths (pipeline_w4.mro, pipeline_w16.mro): plumbing
+# tasks must be identical at both.
+
+stage MKXS(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mkxs",
+)
+
+stage MKFILE(
+    in  int x,
+    out txt f,
+    src py  "stages/mkfile",
+)
+
+stage USE(
+    in  txt   f,
+    in  txt[] all,
+    out int   size,
+    out int   total,
+    src py    "stages/use",
+)
+
+pipeline GATHERS(
+    in  int[] xs,
+    in  int   n,
+    out int[] lit,
+    out int[] lit_total,
+    out int[] run,
+    out int[] run_total,
+)
+{
+    call MKXS(
+        n = self.n,
+    )
+
+    map call MKFILE as A_LIT(
+        x = split self.xs,
+    )
+
+    map call USE as B_LIT(
+        f   = split A_LIT.f,
+        all = A_LIT.f,
+    )
+
+    map call MKFILE as A_RUN(
+        x = split MKXS.xs,
+    )
+
+    map call USE as B_RUN(
+        f   = split A_RUN.f,
+        all = A_RUN.f,
+    )
+
+    return (
+        lit       = B_LIT.size,
+        lit_total = B_LIT.total,
+        run       = B_RUN.size,
+        run_total = B_RUN.total,
+    )
+}
