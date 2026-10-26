@@ -91,6 +91,12 @@ def sources(List us, List rs, List cs, List os) {
     return m
 }
 
+// ownOuts maps each outs dir a task posted, ds, by the path the task wrote
+// it at (postFlags: -fields outs), to where it lies.
+def ownOuts(List ds) {
+    return ds.collectEntries { d -> [('outs/' + d.name): d] }
+}
+
 // referred is the dirs a task wrote, each with the ordinal dir of every
 // file it names by reference (mre stage -field-refs, -fork-refs,
 // -out-refs: one line of space-separated records, each of the dir's last
@@ -351,9 +357,11 @@ def bundleLocations(List ss) {
 }
 
 // refBundles are the bundles holding the files items name by reference
-// that no item holds (refsOf), each once.
+// that no item holds (refsOf), each once, in the order they come: a set
+// keeps them in time linear in them, where List.unique compares each with
+// every one it kept.
 def refBundles(List items) {
-    return refsOf(items).collect { r -> r.parent.parent }.unique()
+    return new LinkedHashSet(refsOf(items).collect { r -> r.parent.parent }).toList()
 }
 
 // published is the published tree the manifest in OUTS's publish dir p
@@ -402,9 +410,10 @@ process OUTS {
     """
 }
 
-// CALL is the run's call, base64, as every task gets it: inline, a value
-// its script writes (callScript), when it is at most bound bytes, or else
-// a file the driver writes once per run and each task stages (callStaged).
+// CALL is the run's call, base64 of its gzip, as every task gets it:
+// inline, a value its script writes (callScript), when it is at most bound
+// bytes, or else a file the driver writes once per run and each task
+// stages (callStaged).
 // The call grows with the entry values; inline, a large one would grow
 // every task's script, and the -resume key Nextflow hashes from it, while
 // a staged file costs each task on an object store a download. collectFile
@@ -866,11 +875,27 @@ workflow NEEDS {
         (0..<patterns.size()).collect { x -> [[x] + ku[patterns[x][2]], [ku, es]] }
     }
     out = seeds.mix(picks.combine(ups, by: 0).map { _q, k, u -> [k, u] }).groupTuple().map { k, us ->
-        [k, ordered(us.findAll { u -> u != null }.unique { u -> u[0] }.collectMany { u -> u[1].collect { e -> [u[0], e] } })]
+        [k, ordered(readOnce(us))]
     }
 
     emit:
     out
+}
+
+// readOnce is the items of the upstream instances an instance's group us
+// holds, [key, items] each or a null seed, each paired with its instance's
+// key. Two patterns can give it one instance, which a map keyed by the
+// instance's key keeps once, the first, in time linear in the group, where
+// List.unique compares each with every one it kept: a group one pattern
+// gives every upstream instance and another its own holds N + 1.
+def readOnce(List us) {
+    def first = [:]
+    us.each { u ->
+        if (u != null) {
+            first.putIfAbsent(u[0], u[1])
+        }
+    }
+    return first.collectMany { ku, es -> es.collect { e -> [ku, e] } }
 }
 
 // needed is, of each pattern whose limits instance key k meets, the key it
@@ -1071,7 +1096,8 @@ workflow DONE {
 // the dirs, value records and refs at positions at to at + 2 of what its
 // task posted. A dir names a file by reference where its producer wrote
 // it, which POSTED finds among the sources of the instance's posting task
-// (SOURCES), by its key.
+// (SOURCES), by its key, or, for a fork or partner element naming a file
+// of the task's own outs, among those (ownOuts).
 workflow POSTED {
     take:
     posted
@@ -1080,7 +1106,7 @@ workflow POSTED {
     at
 
     main:
-    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
+    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1] + ownOuts(v[1])) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
 
     emit:
     all

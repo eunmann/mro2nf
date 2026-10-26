@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -20,12 +21,7 @@ func mountedTree(t *testing.T) (shim.Roots, string, string) {
 	file := writeSelfNamed(t, filepath.Join(root, "b", "reads", "r1.fastq"))
 	writeSelfNamed(t, filepath.Join(root, "b", "ref", "genome.fa"))
 
-	roots, err := shim.NewRoots(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return roots, file, filepath.Join(root, "b", "ref") + "/"
+	return shim.NewRoots(root), file, filepath.Join(root, "b", "ref") + "/"
 }
 
 // TestMountedLeafStaysItsPath: a file leaf under a root is the same path in
@@ -35,7 +31,7 @@ func mountedTree(t *testing.T) (shim.Roots, string, string) {
 // unchanged.
 func TestMountedLeafStaysItsPath(t *testing.T) {
 	roots, file, dir := mountedTree(t)
-	params := fields(t, "f file", "d path")
+	params := typestest.Fields(t, "f file", "d path")
 	payload := map[string]any{"f": file, "d": dir}
 
 	work := t.TempDir()
@@ -136,7 +132,7 @@ func TestMountHolds(t *testing.T) {
 // a target outside the task.
 func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 	roots, file, _ := mountedTree(t)
-	params := fields(t, "out file")
+	params := typestest.Fields(t, "out file")
 
 	work := t.TempDir()
 	link := filepath.Join(work, "main", "files", "r1.fastq")
@@ -158,7 +154,7 @@ func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 		bundle := filepath.Join(t.TempDir(), "outs")
 		_, err = shim.WriteItem(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs}, shim.Staged{})
 
-		if !rs.Holds(file) {
+		if !holds(t, rs, file) {
 			if err == nil {
 				t.Error("a strict confinement with no roots staged a link outside the task")
 			}

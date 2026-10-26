@@ -22,17 +22,17 @@ func TestBenchMetricsStagedBytes(t *testing.T) {
 	requireTools(t, "python3")
 
 	dir := t.TempDir()
-	inline := writeBenchFile(t, filepath.Join(dir, "inline.txt"), "abc")
-	spilled := writeBenchFile(t, filepath.Join(dir, "spilled.txt"), "abcde")
+	inline := writeTestFile(t, filepath.Join(dir, "inline.txt"), "abc")
+	spilled := writeTestFile(t, filepath.Join(dir, "spilled.txt"), "abcde")
 
 	writeBenchTask(t, dir, "aa/inline", "WF:ST (1)", "    rm -f inline.txt\n    ln -s "+inline+" inline.txt\n")
 
 	spill := filepath.Join(dir, "work", "bb", "spilled")
 	writeBenchTask(t, dir, "bb/spilled", "WF:ST (2)", "    bash "+filepath.Join(spill, ".command.stage")+"\n")
-	writeBenchFile(t, filepath.Join(spill, ".command.stage"), "rm -f spilled.txt\nln -s "+spilled+" spilled.txt\n")
+	writeTestFile(t, filepath.Join(spill, ".command.stage"), "rm -f spilled.txt\nln -s "+spilled+" spilled.txt\n")
 
-	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\n")
-	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
 
 	cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
 		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
@@ -66,7 +66,7 @@ func TestBenchMetricsRestagedBytes(t *testing.T) {
 	requireTools(t, "python3")
 
 	dir := t.TempDir()
-	payload := writeBenchFile(t, filepath.Join(dir, "up", "f", "payload.txt"), "payload!")
+	payload := writeTestFile(t, filepath.Join(dir, "up", "f", "payload.txt"), "payload!")
 	src := filepath.Dir(filepath.Dir(payload))
 
 	task := filepath.Join(dir, "work", "aa", "use")
@@ -84,15 +84,15 @@ func TestBenchMetricsRestagedBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeBenchFile(t, filepath.Join(task, "copy.txt"), "payload!")
-	writeBenchFile(t, filepath.Join(task, "other.txt"), "another!")
+	writeTestFile(t, filepath.Join(task, "copy.txt"), "payload!")
+	writeTestFile(t, filepath.Join(task, "other.txt"), "another!")
 
 	if err := os.Symlink(payload, filepath.Join(task, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
 
-	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\n")
-	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
 
 	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
 		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
@@ -121,17 +121,17 @@ func TestBenchMetricsPlumbingProbeRefs(t *testing.T) {
 	requireTools(t, "python3")
 
 	dir := t.TempDir()
-	probe := writeBenchFile(t, filepath.Join(dir, "up", "big.txt"), "PROBE\nxxxx")
-	other := writeBenchFile(t, filepath.Join(dir, "up", "other.txt"), "other")
+	probe := writeTestFile(t, filepath.Join(dir, "up", "big.txt"), "PROBE\nxxxx")
+	other := writeTestFile(t, filepath.Join(dir, "up", "other.txt"), "other")
 
 	writeBenchTask(t, dir, "aa/use", "WF:ST (1)", "    ln -s "+probe+" big.txt\n")
 	writeBenchTask(t, dir, "bb/stages", "WF:OUTS", "    ln -s "+probe+" big.txt\n")
 	writeBenchTask(t, dir, "cc/writes", "WF:PLAN", "    ln -s "+other+" other.txt\n")
-	writeBenchFile(t, filepath.Join(dir, "work", "cc", "writes", "results", "big.txt"), "PROBE\nxxxx")
+	writeTestFile(t, filepath.Join(dir, "work", "cc", "writes", "results", "big.txt"), "PROBE\nxxxx")
 	writeBenchTask(t, dir, "dd/neither", "WF:PLAN", "    ln -s "+other+" other.txt\n")
 
-	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:OUTS\nWF:PLAN\n")
-	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:OUTS\nWF:PLAN\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
 
 	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
 		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
@@ -172,7 +172,7 @@ func TestBenchMetricsReadsEveryTaskNameHeader(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
+			in := writeTestFile(t, filepath.Join(dir, "in.txt"), "abc")
 
 			writeBenchTaskHeader(t, dir, "aa/task", tc.header, "    rm -f in.txt\n    ln -s "+in+" in.txt\n")
 
@@ -204,7 +204,7 @@ func TestBenchMetricsReadsEveryStagingLink(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
+			in := writeTestFile(t, filepath.Join(dir, "in.txt"), "abc")
 
 			writeBenchTask(t, dir, "aa/task", "WF:ST (1)", "    rm -f in.txt\n    "+fmt.Sprintf(tc.line, in)+"\n")
 
@@ -216,22 +216,91 @@ func TestBenchMetricsReadsEveryStagingLink(t *testing.T) {
 	}
 }
 
-// TestBenchMetricsLeavesOutTheCall pins that the staged-bytes probe leaves
-// out call.b64, the run's call a task stages once it outgrows its script:
-// it is the invocation every mrp job's _jobinfo carries too, which grows
-// with the entry values, not orchestration staging.
-func TestBenchMetricsLeavesOutTheCall(t *testing.T) {
+// TestBenchMetricsCountsTheCall (#623) pins that the staged bytes count the
+// run's call each task gets, the call.b64 it stages once the call outgrows
+// its script or the call its script writes, while the most bytes one task
+// stages leave it out, as it is the invocation every mrp job's _jobinfo
+// carries too, which grows with the entry values, and report it apart.
+func TestBenchMetricsCountsTheCall(t *testing.T) {
 	requireTools(t, "python3")
 
 	dir := t.TempDir()
-	in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
-	call := writeBenchFile(t, filepath.Join(dir, "call.b64"), strings.Repeat("c", 5000))
+	in := writeTestFile(t, filepath.Join(dir, "in.txt"), "abc")
+	call := writeTestFile(t, filepath.Join(dir, "call.b64"), strings.Repeat("c", 5000))
 
-	writeBenchTask(t, dir, "aa/task", "WF:ST (1)", "    rm -f in.txt call.b64\n    ln -sfn "+in+" in.txt\n    ln -sfn "+call+" call.b64\n")
+	writeBenchTask(t, dir, "aa/staged", "WF:ST (1)", "    rm -f in.txt call.b64\n    ln -sfn "+in+" in.txt\n    ln -sfn "+call+" call.b64\n")
+	writeBenchTask(t, dir, "bb/inline", "WF:ST (2)", "")
+	writeTestFile(t, filepath.Join(dir, "work", "bb", "inline", ".command.sh"),
+		"#!/bin/bash -ue\ncat > call.b64 <<'MRO2NF_CALL'\n"+strings.Repeat("c", 499)+"\nMRO2NF_CALL\nmre stage\n")
 
-	got := benchStagedMax(t, dir, "WF:ST (1)")
-	if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
-		t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "2").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	type calls struct {
+		Staged    int            `json:"stage_staged_bytes"`
+		StagedMax map[string]int `json:"stage_staged_bytes_max"`
+		CallMax   map[string]int `json:"stage_call_bytes_max"`
+	}
+
+	var got calls
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	want := calls{Staged: len("abc") + 5000 + 500, StagedMax: map[string]int{"ST": len("abc")}, CallMax: map[string]int{"ST": 5000}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("call bytes (-want +got):\n%s", diff)
+	}
+}
+
+// TestBenchMetricsOutputBytes (#623) pins output_bytes, the bytes of the
+// files a stage task's declared outputs hold, each path once and no file
+// it wrote outside them, and job_bytes, those its jobs wrote into their
+// files dirs.
+func TestBenchMetricsOutputBytes(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	task := filepath.Join(dir, "work", "aa", "post")
+
+	writeBenchTaskHeader(t, dir, "aa/post", "### ---\n### name: 'WF:ST (1)'\n### outputs:\n### - 'outs/*'\n### - 'forks/*/*'\n### - 'outs/a'\n### ...", "")
+	writeTestFile(t, filepath.Join(task, "chnk0", "_jobinfo"), "{}")
+	writeTestFile(t, filepath.Join(task, "chnk0", "files", "data.txt"), "0123456789")
+	writeTestFile(t, filepath.Join(task, "outs", "a", "f", "L0000", "data.txt"), "0123456789")
+	writeTestFile(t, filepath.Join(task, "outs", "a", "data.json"), "{}")
+	writeTestFile(t, filepath.Join(task, "forks", "R", "0000", "data.json"), "{\"x\":1}")
+	writeTestFile(t, filepath.Join(task, "outs_values"), "unread by the count")
+
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "1").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	type outputs struct {
+		Outputs int `json:"output_bytes"`
+		Jobs    int `json:"job_bytes"`
+	}
+
+	var got outputs
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	want := outputs{Outputs: len("0123456789") + len("{}") + len("{\"x\":1}"), Jobs: len("0123456789")}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("output and job bytes (-want +got):\n%s", diff)
 	}
 }
 
@@ -246,16 +315,18 @@ func TestBenchMetricsCarriedBytes(t *testing.T) {
 	records := "xs:eyJ2YWx1ZSI6WzFdfQ==\nys:eyJ2YWx1ZSI6WzJdfQ==\n"
 
 	writeBenchTask(t, dir, "aa/top", "WF:ST (1)", "")
-	writeBenchFile(t, filepath.Join(dir, "work", "aa", "top", ".command.sh"),
+	writeTestFile(t, filepath.Join(dir, "work", "aa", "top", ".command.sh"),
 		"#!/bin/bash -ue\ncat > values <<'MRO2NF_VALUES'\n"+records+"MRO2NF_VALUES\nmre stage\n")
-	writeBenchTask(t, dir, "bb/indented", "WF:ST (2)", "")
-	writeBenchFile(t, filepath.Join(dir, "work", "bb", "indented", ".command.sh"),
-		"#!/bin/bash -ue\ncat > call.b64 <<'MRO2NF_CALL'\n"+strings.Repeat("c", 500)+"\nMRO2NF_CALL\n    cat > values <<'MRO2NF_VALUES'\nxs:e30=\nMRO2NF_VALUES\n")
-	writeBenchTask(t, dir, "cc/none", "WF:OTHER (1)", "")
-	writeBenchFile(t, filepath.Join(dir, "work", "cc", "none", ".command.sh"), "#!/bin/bash -ue\nmre stage\n")
 
-	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\nWF:OTHER (1)\n")
-	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST", "OTHER"]`)
+	writeBenchTask(t, dir, "bb/indented", "WF:ST (2)", "")
+	writeTestFile(t, filepath.Join(dir, "work", "bb", "indented", ".command.sh"),
+		"#!/bin/bash -ue\ncat > call.b64 <<'MRO2NF_CALL'\n"+strings.Repeat("c", 500)+"\nMRO2NF_CALL\n    cat > values <<'MRO2NF_VALUES'\nxs:e30=\nMRO2NF_VALUES\n")
+
+	writeBenchTask(t, dir, "cc/none", "WF:OTHER (1)", "")
+	writeTestFile(t, filepath.Join(dir, "work", "cc", "none", ".command.sh"), "#!/bin/bash -ue\nmre stage\n")
+
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\nWF:OTHER (1)\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST", "OTHER"]`)
 
 	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
 		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
@@ -281,8 +352,8 @@ func TestBenchMetricsCarriedBytes(t *testing.T) {
 func benchStagedMax(t *testing.T, dir, traced string) map[string]int {
 	t.Helper()
 
-	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\n"+traced+"\n")
-	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+	trace := writeTestFile(t, filepath.Join(dir, "trace.tsv"), "name\n"+traced+"\n")
+	stages := writeTestFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
 
 	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
 		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
@@ -315,20 +386,5 @@ func writeBenchTaskHeader(t *testing.T, dir, hash, header, nxfStage string) {
 	t.Helper()
 
 	run := strings.Join([]string{"#!/bin/bash", header, "nxf_stage() {", "    true", nxfStage + "}", ""}, "\n")
-	writeBenchFile(t, filepath.Join(dir, "work", hash, ".command.run"), run)
-}
-
-// writeBenchFile writes body to path, creating its dir, and returns path.
-func writeBenchFile(t *testing.T, path, body string) string {
-	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	return path
+	writeTestFile(t, filepath.Join(dir, "work", hash, ".command.run"), run)
 }

@@ -275,7 +275,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shape: [Forks, Split, MapSplit, MapNested, MapDisabled, MapChain, WideFanin]
+        shape: [Forks, Split, MapSplit, MapNested, MapDisabled, MapChain, Zip, ZipGated, ForkDisabled, SplitBroadcast, WideFanin]
     env:
       E2E_REQUIRE: "1"
     steps:
@@ -290,8 +290,8 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
       # The action is pinned; the Nextflow it installs is latest, deliberately.
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
-      # No shape name is a prefix of another, so the regexp needs no end anchor.
-      - run: make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}' SCALE_TIMEOUT=100m
+      # The end anchor keeps Split from also running SplitBroadcast, and Zip ZipGated.
+      - run: make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}$' SCALE_TIMEOUT=100m
       - if: ${{ always() }}
         run: |
           { echo '```'; cat artifacts/scale/*.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

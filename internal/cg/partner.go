@@ -119,9 +119,23 @@ func (g *Graph) ownSource(root *syntax.CallGraphStage, ref *syntax.RefExp) bool 
 // partners are the partners of node's outputs over every root, one per
 // root and output, in dir order.
 func (g *Graph) partners(node string) ([]partner, error) {
-	found := map[string]partner{}
+	np := g.partnered[node]
 
-	var errs []error
+	return np.list, np.err
+}
+
+// nodePartners are one node's partners, or the error of splits of one of
+// its outputs over one root that disagree.
+type nodePartners struct {
+	list []partner
+	err  error
+}
+
+// indexPartners finds the partners of every node's outputs in one scan of
+// every stage's bindings.
+func (g *Graph) indexPartners() map[string]nodePartners {
+	found := map[string]map[string]partner{}
+	errs := map[string][]error{}
 
 	for _, fqid := range slices.Sorted(maps.Keys(g.stages)) {
 		st := g.stages[fqid]
@@ -129,29 +143,42 @@ func (g *Graph) partners(node string) ([]partner, error) {
 		for _, e := range bindings(st) {
 			walkSplits(e, func(sp *syntax.SplitExp) {
 				p, ok := g.partnerOf(st, sp)
-				if !ok || p.ref.Id != node {
+				if !ok {
 					return
 				}
 
-				if was, ok := found[p.dir()]; ok && !sameRef(was.ref, p.ref) {
-					errs = append(errs, fmt.Errorf("%w: %s.%s over %s", errPartnerSources, p.ref.Id, p.ref.OutputId, p.root.Fqid))
+				node := p.ref.Id
+				if was, ok := found[node][p.dir()]; ok && !sameRef(was.ref, p.ref) {
+					errs[node] = append(errs[node], fmt.Errorf("%w: %s.%s over %s", errPartnerSources, p.ref.Id, p.ref.OutputId, p.root.Fqid))
 				}
 
-				found[p.dir()] = p
+				if found[node] == nil {
+					found[node] = map[string]partner{}
+				}
+
+				found[node][p.dir()] = p
 			})
 		}
 	}
 
-	if err := errors.Join(errs...); err != nil {
-		return nil, err
+	out := make(map[string]nodePartners, len(found))
+
+	for node, byDir := range found {
+		if err := errors.Join(errs[node]...); err != nil {
+			out[node] = nodePartners{err: err}
+
+			continue
+		}
+
+		list := make([]partner, 0, len(byDir))
+		for _, d := range slices.Sorted(maps.Keys(byDir)) {
+			list = append(list, byDir[d])
+		}
+
+		out[node] = nodePartners{list: list}
 	}
 
-	out := make([]partner, 0, len(found))
-	for _, d := range slices.Sorted(maps.Keys(found)) {
-		out = append(out, found[d])
-	}
-
-	return out, nil
+	return out
 }
 
 // partnerJSON is a partner dir's record: an element at an index or key,

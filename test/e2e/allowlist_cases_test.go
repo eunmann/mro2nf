@@ -30,10 +30,10 @@ func publishedPair(t *testing.T) (string, string) {
 
 	ps, results := t.TempDir(), t.TempDir()
 	outs := filepath.Join(ps, "outs")
-	host := writeABITestFile(t, filepath.Join(t.TempDir(), "host.py"), "print('linked')\n")
+	host := writeTestFile(t, filepath.Join(t.TempDir(), "host.py"), "print('linked')\n")
 
-	writeABITestFile(t, filepath.Join(outs, "note.txt"), "21.0")
-	shared := writeABITestFile(t, filepath.Join(outs, "shared.txt"), "shared")
+	writeTestFile(t, filepath.Join(outs, "note.txt"), "21.0")
+	shared := writeTestFile(t, filepath.Join(outs, "shared.txt"), "shared")
 
 	for _, link := range [][2]string{{host, "linked.txt"}, {host, "relinked.txt"}, {"shared.txt", "again.txt"}} {
 		if err := os.Symlink(link[0], filepath.Join(outs, link[1])); err != nil {
@@ -51,16 +51,16 @@ func publishedPair(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 
-	writeABITestFile(t, filepath.Join(ps, "P", "fork0", "_outs"),
+	writeTestFile(t, filepath.Join(ps, "P", "fork0", "_outs"),
 		string(mrpOuts[:len(mrpOuts)-1])+`, "stats": `+pairStats+`}`)
 
-	writeABITestFile(t, filepath.Join(results, "note.txt"), "21.0")
-	writeABITestFile(t, filepath.Join(results, "linked.txt"), "print('linked')\n")
-	writeABITestFile(t, filepath.Join(results, "relinked.txt"), "print('linked')\n")
-	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
-	writeABITestFile(t, filepath.Join(results, "shared.txt"), "shared")
-	writeABITestFile(t, filepath.Join(results, "again.txt"), "shared")
-	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsJSON(pairStats))
+	writeTestFile(t, filepath.Join(results, "note.txt"), "21.0")
+	writeTestFile(t, filepath.Join(results, "linked.txt"), "print('linked')\n")
+	writeTestFile(t, filepath.Join(results, "relinked.txt"), "print('linked')\n")
+	writeTestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
+	writeTestFile(t, filepath.Join(results, "shared.txt"), "shared")
+	writeTestFile(t, filepath.Join(results, "again.txt"), "shared")
+	writeTestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsJSON(pairStats))
 
 	return ps, results
 }
@@ -124,7 +124,7 @@ func TestHostFileLinkedFromTwoOutputsMapsEachLink(t *testing.T) {
 	for _, link := range []string{"linked.txt", "relinked.txt"} {
 		t.Run(link, func(t *testing.T) {
 			ps, results := publishedPair(t)
-			writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsOneLink(link))
+			writeTestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsOneLink(link))
 
 			reports, err := diffPublished(allow, pairFixture, ps, results)
 			if err != nil {
@@ -148,7 +148,7 @@ const pairFixture = "kitchen_sink"
 func mrpChainedOutput(t *testing.T, ps string) string {
 	t.Helper()
 
-	host := writeABITestFile(t, filepath.Join(t.TempDir(), "chained.txt"), "chained\n")
+	host := writeTestFile(t, filepath.Join(t.TempDir(), "chained.txt"), "chained\n")
 	files := filepath.Join(ps, "P", "CHAIN", "fork0", "files")
 	staged := filepath.Join(files, "staged.txt")
 
@@ -223,7 +223,7 @@ func TestScopedRuleEntryFailsWhereItExcusesNothing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.mrpOuts != nil {
-				writeABITestFile(t, mrpJSON, string(tc.mrpOuts))
+				writeTestFile(t, mrpJSON, string(tc.mrpOuts))
 			}
 
 			reports, err := diffPublished(allow, tc.fixture, ps, results)
@@ -250,12 +250,14 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	mrpOuts := filepath.Join(ps, "outs")
 	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
 	nfJSON := filepath.Join(results, "pipeline_outs.json")
-	sortedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_sorted.json"),
+	sortedJSON := writeTestFile(t, filepath.Join(t.TempDir(), "nf_sorted.json"),
 		pairOutsJSON(`{"count": 4, "mean": 2.5, "total": 10.0}`))
-	intJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
+
+	intJSON := writeTestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
 		pairOutsJSON(`{"count": 4, "total": 10, "mean": 2.5}`))
-	linkedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_linked.json"), pairOutsOneLink("linked.txt"))
-	relinkedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_relinked.json"), pairOutsOneLink("relinked.txt"))
+
+	linkedJSON := writeTestFile(t, filepath.Join(t.TempDir(), "nf_linked.json"), pairOutsOneLink("linked.txt"))
+	relinkedJSON := writeTestFile(t, filepath.Join(t.TempDir(), "nf_relinked.json"), pairOutsOneLink("relinked.txt"))
 
 	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
 
@@ -364,7 +366,7 @@ func allowlistWithout(t *testing.T, path, id string) string {
 		t.Fatal(err)
 	}
 
-	return writeABITestFile(t, filepath.Join(t.TempDir(), allowlistFile), string(out))
+	return writeTestFile(t, filepath.Join(t.TempDir(), allowlistFile), string(out))
 }
 
 // TestRemovingAnOutcomeEntryFailsItsCase replays each mrpOutcomeCases entry

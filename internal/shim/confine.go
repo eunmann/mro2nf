@@ -160,6 +160,10 @@ func (c *Confinement) admit(src string) (leafKind, error) {
 			return leafStaged, nil
 		}
 
+		if c.roots.holdsGiven(p) {
+			return leafInput, nil
+		}
+
 		parent, err := filepath.EvalSymlinks(filepath.Dir(p))
 		if err != nil {
 			return leafOwn, fmt.Errorf("resolve %s: %w", p, err)
@@ -200,16 +204,21 @@ func (c *Confinement) classify(src, p string) (leafKind, error) {
 		return leafOwn, nil
 	}
 
-	if c.roots.Holds(p) {
-		return leafInput, nil
-	}
-
 	inputs, err := c.stagedInputs()
 	if err != nil {
 		return leafOwn, err
 	}
 
 	if withinAny(p, inputs) {
+		return leafInput, nil
+	}
+
+	held, err := c.roots.Holds(p)
+	if err != nil {
+		return leafOwn, err
+	}
+
+	if held {
 		return leafInput, nil
 	}
 

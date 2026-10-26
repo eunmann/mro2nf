@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -68,7 +69,7 @@ func TestWriteItemKeepsBasename(t *testing.T) {
 		srcs = append(srcs, src)
 	}
 
-	params := fields(t, "fs fastq.gz[]")
+	params := typestest.Fields(t, "fs fastq.gz[]")
 	first := filepath.Join(dir, "first")
 	writeBundle(t, first, map[string]any{"fs": srcs}, params, shim.Opts{})
 
@@ -107,7 +108,7 @@ func TestWriteItemSharedPathOneLeaf(t *testing.T) {
 		}
 	}
 
-	params := fields(t, "fs file[]", "cfg Cfg")
+	params := typestest.Fields(t, "fs file[]", "cfg Cfg")
 	payload := map[string]any{
 		"fs":  []any{shared, other, filepath.Join(dir, "a", ".", "x.txt")},
 		"cfg": map[string]any{"ref": shared},
@@ -141,7 +142,7 @@ func TestWriteItemSharedPathOneLeaf(t *testing.T) {
 // producer's file of the same basename keeps its own leaf.
 func TestWriteItemSameFileAcrossBundlesOneLeaf(t *testing.T) {
 	dir := t.TempDir()
-	params := fields(t, "f txt")
+	params := typestest.Fields(t, "f txt")
 
 	make1 := writeFileBundle(t, filepath.Join(dir, "make1"), params, filepath.Join(dir, "m1", "a.txt"))
 	make2 := writeFileBundle(t, filepath.Join(dir, "make2"), params, filepath.Join(dir, "m2", "a.txt"))
@@ -150,7 +151,7 @@ func TestWriteItemSameFileAcrossBundlesOneLeaf(t *testing.T) {
 	pass := filepath.Join(dir, "pass", "outs")
 	writeBundle(t, pass, readPayload(t, passIn), params, shim.Opts{})
 
-	outs := fields(t, "a txt", "b txt", "c txt")
+	outs := typestest.Fields(t, "a txt", "b txt", "c txt")
 	payload := map[string]any{"a": nil, "b": nil, "c": nil}
 
 	for name, src := range map[string]string{"a": make1, "b": pass, "c": make2} {
@@ -178,7 +179,7 @@ func TestWriteItemSameFileAcrossBundlesOneLeaf(t *testing.T) {
 // written.
 func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 	dir := t.TempDir()
-	params := fields(t, "f txt")
+	params := typestest.Fields(t, "f txt")
 	written := filepath.Join(dir, "make", "main", "files", "a.txt")
 
 	make1 := writeFileBundle(t, filepath.Join(dir, "make", "outs"), params, written)
@@ -215,7 +216,7 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "own txt", "link txt", "host txt")
+	params := typestest.Fields(t, "own txt", "link txt", "host txt")
 	outs := filepath.Join(work, "outs")
 	writeBundle(t, outs, map[string]any{"own": own, "link": link, "host": host}, params, shim.Opts{Confine: conf})
 
@@ -245,7 +246,7 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 // task that returns it.
 func TestLeafOriginInheritsEnclosingLeaf(t *testing.T) {
 	dir := t.TempDir()
-	params := fields(t, "d path")
+	params := typestest.Fields(t, "d path")
 
 	host := filepath.Dir(writeSelfNamed(t, filepath.Join(dir, "host", "ref", "fasta", "genome.fa")))
 	given := filepath.Join(dir, "given")
@@ -366,8 +367,8 @@ func linkLeaves(t *testing.T, dir string, payload map[string]any, params []*synt
 // leaves.
 func TestLinkLeaves(t *testing.T) {
 	dir := t.TempDir()
-	one := fields(t, "f file")
-	params := fields(t, "host file", "up file")
+	one := typestest.Fields(t, "f file")
+	params := typestest.Fields(t, "host file", "up file")
 
 	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
 	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
@@ -416,7 +417,7 @@ func TestLinkLeaves(t *testing.T) {
 // leaf's place, for a host file and for a staged bundle's leaf.
 func TestLinkLeavesFails(t *testing.T) {
 	dir := t.TempDir()
-	one := fields(t, "f file")
+	one := typestest.Fields(t, "f file")
 
 	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
 	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
@@ -457,8 +458,8 @@ func TestLinkLeavesFails(t *testing.T) {
 // stage returns the same file either way.
 func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	dir := t.TempDir()
-	one := fields(t, "f file")
-	params := fields(t, "host file", "up file")
+	one := typestest.Fields(t, "f file")
+	params := typestest.Fields(t, "host file", "up file")
 
 	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
 	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
@@ -546,7 +547,7 @@ func TestWriteItemRefusesOriginFileName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "f file")
+	params := typestest.Fields(t, "f file")
 
 	_, err := shim.WriteItem(filepath.Join(dir, "bundle"), map[string]any{"f": src}, params, fileTable(t), shim.Opts{}, shim.Staged{})
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
@@ -633,7 +634,7 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "f file", "n int")
+	params := typestest.Fields(t, "f file", "n int")
 	payload := map[string]any{"f": src, "n": float64(7)}
 
 	bundle := filepath.Join(dir, "bundle")
@@ -682,7 +683,7 @@ func TestWriteItemDirLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "d file")
+	params := typestest.Fields(t, "d file")
 	payload := map[string]any{"d": srcDir}
 
 	marked := writeMarked(t, dir, payload, params)
@@ -714,7 +715,7 @@ func TestWriteItemNamesDirSpelledWithSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "d path[]")
+	params := typestest.Fields(t, "d path[]")
 	payload := map[string]any{"d": []any{srcDir + "/", srcDir + "/."}}
 
 	marked := writeMarked(t, filepath.Join(dir, "bundle"), payload, params)
@@ -763,7 +764,7 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "made txt", "fake txt", "s string", "arr string[]", "m map")
+	params := typestest.Fields(t, "made txt", "fake txt", "s string", "arr string[]", "m map")
 	strs := []any{
 		"@mre:file:f/L0000/made.txt",
 		"@mre:dir:f/L0000/made.txt",
@@ -873,7 +874,7 @@ func TestBundleNestedStructFile(t *testing.T) {
 	}
 
 	payload := map[string]any{"c": map[string]any{"ref": src}}
-	params := fields(t, "c Cfg")
+	params := typestest.Fields(t, "c Cfg")
 
 	bundle := filepath.Join(dir, "b")
 	writeBundle(t, bundle, payload, params, shim.Opts{})
@@ -904,7 +905,7 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 	dir := t.TempDir()
 
 	missing := filepath.Join(dir, "never-written.txt")
-	params := fields(t, "f file", "n int")
+	params := typestest.Fields(t, "f file", "n int")
 	payload := map[string]any{"f": missing, "n": float64(3)}
 
 	marked := writeMarked(t, dir, payload, params)
@@ -1076,7 +1077,7 @@ func TestWriteItemDanglingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := fields(t, "f file")
+	params := typestest.Fields(t, "f file")
 	marked := writeMarked(t, dir, map[string]any{"f": dangling}, params)
 	if marked["f"] != dangling {
 		t.Errorf("dangling output f = %v, want the unchanged path %q", marked["f"], dangling)

@@ -130,15 +130,34 @@ func (g *Graph) Topology() (Topology, error) {
 	}
 
 	t.Nodes = dependencyOrder(byID, t.Roots)
+	t.Outs = g.reads(g.outsExps()...)
 
+	return t, nil
+}
+
+// outsExps are what Martian's post-processing of the pipeline outs reads:
+// the gates of the roots whose forks a stage fixes (sourceGates), and the
+// pipeline's outs.
+func (g *Graph) outsExps() []syntax.Exp {
 	outs := g.sourceGates()
 	if ro := g.root.ResolvedOutputs(); ro != nil && ro.Exp != nil {
 		outs = append(outs, ro.Exp)
 	}
 
-	t.Outs = g.reads(outs...)
+	return outs
+}
 
-	return t, nil
+// readsOf are the reads of node's outs: by a stage node's bindings
+// (nodeReads) or by the pipeline outs (Topology.Outs).
+func (g *Graph) readsOf(node string) []Read {
+	all := g.reads(g.outsExps()...)
+
+	for _, fqid := range slices.Sorted(maps.Keys(g.stages)) {
+		r, _ := g.nodeReads(g.stages[fqid])
+		all = append(all, r...)
+	}
+
+	return slices.DeleteFunc(all, func(r Read) bool { return r.Node != node })
 }
 
 func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
@@ -212,10 +231,6 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	}
 
 	n.Reads, n.Zips = g.nodeReads(st)
-	for i := range n.Reads {
-		n.Reads[i].Patterns = g.readPatterns(st, n.Reads[i].Node)
-	}
-
 	n.Preflights = g.preflights(st)
 
 	gates, err := g.gates(st)
@@ -233,33 +248,23 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	return n, nil
 }
 
-// nodeReads are the stage outs st's bindings read, less the splits a
-// staged element serves: of the output a stage-fed root's forks come from
-// (the root's fork element), and of any other stage output (its partner
-// element, one of the zips). A disable binding's split is served alike, so
-// an enabled fork the driver let through re-resolves its gate from one
-// element, not the gating stage's whole output.
+// nodeReads are the stage outs st's bindings read, and the instances they
+// read, less the splits a staged element serves: of the output a stage-fed
+// root's forks come from (the root's fork element), and of any other stage
+// output (its partner element, one of the zips). A disable binding's split
+// is served alike, so an enabled fork the driver let through re-resolves
+// its gate from one element, not the gating stage's whole output.
 func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
-	roots := map[*syntax.CallStm]*syntax.CallGraphStage{}
-	for _, r := range st.ForkRoots() {
-		roots[r.Call()] = r
-	}
-
-	in := &readerSplits{own: st.ForkRoots(), roots: roots, served: func(x *syntax.SplitExp) bool {
-		if _, partnered := g.partnerOf(st, x); partnered {
-			return true
-		}
-
-		ref, ok := x.Value.(*syntax.RefExp)
-
-		return ok && roots[x.Call] != nil && g.ownSource(roots[x.Call], ref)
-	}}
-
 	fields := map[string]map[string]bool{}
+	patterns := g.readPatternsOf(st)
+	w := bindingWalk{g: g, reader: g.readerSplitsOf(st), visit: func(ref *syntax.RefExp, ctx []splitCtx) {
+		addRead(fields, ref)
+		patterns.ref(ref, ctx)
+	}}
 	zips := map[Zip]bool{}
 
 	for _, e := range bindings(st) {
-		g.collectReads(e, in, fields)
+		w.exp(e, nil)
 		walkSplits(e, func(x *syntax.SplitExp) {
 			if p, ok := g.partnerOf(st, x); ok {
 				zips[Zip{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}] = true
@@ -267,7 +272,12 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 		})
 	}
 
-	return readList(fields), slices.SortedFunc(maps.Keys(zips), compareZips)
+	reads := readList(fields)
+	for i := range reads {
+		reads[i].Patterns = patterns.of(reads[i].Node)
+	}
+
+	return reads, slices.SortedFunc(maps.Keys(zips), compareZips)
 }
 
 // bindings are st's input bindings, in input order, then its disable
@@ -425,9 +435,10 @@ func (g *Graph) gateRoots(st *syntax.CallGraphStage, d syntax.Exp, up *syntax.Ca
 // reads are the stage outs exps read.
 func (g *Graph) reads(exps ...syntax.Exp) []Read {
 	fields := map[string]map[string]bool{}
+	w := bindingWalk{g: g, visit: func(ref *syntax.RefExp, _ []splitCtx) { addRead(fields, ref) }}
 
 	for _, e := range exps {
-		g.collectReads(e, nil, fields)
+		w.exp(e, nil)
 	}
 
 	return readList(fields)
@@ -447,108 +458,6 @@ func readList(fields map[string]map[string]bool) []Read {
 	}
 
 	return out
-}
-
-// readerSplits are the splits of one reader's bindings collectReads tells
-// apart: those a staged element serves, and those over the reader's own
-// roots, own, by call.
-type readerSplits struct {
-	served func(*syntax.SplitExp) bool
-	own    syntax.ForkRootList
-	roots  map[*syntax.CallStm]*syntax.CallGraphStage
-}
-
-// forkRoots are the roots the reader is forked on, none for the pipeline's
-// outs.
-func (in *readerSplits) forkRoots() syntax.ForkRootList {
-	if in == nil {
-		return nil
-	}
-
-	return in.own
-}
-
-// collectReads adds to fields the stage outs e reads, less the splits of
-// in, if set, that a staged element serves.
-func (g *Graph) collectReads(e syntax.Exp, in *readerSplits, fields map[string]map[string]bool) {
-	switch x := e.(type) {
-	case *syntax.SplitExp:
-		g.collectSplit(x, in, fields)
-	case *syntax.RefExp:
-		addRead(fields, x)
-	case *syntax.ArrayExp:
-		for _, v := range x.Value {
-			g.collectReads(v, in, fields)
-		}
-	case *syntax.MapExp:
-		for _, v := range x.Value {
-			g.collectReads(v, in, fields)
-		}
-	case *syntax.MergeExp:
-		g.collectMerge(x, in, fields)
-	case *syntax.DisabledExp:
-		g.collectReads(x.Disabled, in, fields)
-		g.collectReads(x.Value, in, fields)
-	}
-}
-
-// collectMerge adds to fields the stage outs x reads where in resolves it.
-// A merge over a root whose forks a stage fixes takes them from the root's
-// source, as mrp does: the instances it gathers are no count of them, as a
-// disabled one posts none. It reads what counting them reads (countReads),
-// not the source's every value.
-func (g *Graph) collectMerge(x *syntax.MergeExp, in *readerSplits, fields map[string]map[string]bool) {
-	if g.mergeGathersNone(x, in.forkRoots()) {
-		return
-	}
-
-	g.collectReads(x.Value, in, fields)
-
-	if x.ForkNode != nil {
-		addRead(fields, x.ForkNode)
-	}
-
-	if root, ok := g.mergeCounted(x, in.forkRoots()); ok {
-		for _, r := range g.countReads(root) {
-			addRead(fields, r)
-		}
-	}
-}
-
-// collectSplit adds to fields the stage outs x reads: of a split a staged
-// element serves, only its gate.
-func (g *Graph) collectSplit(x *syntax.SplitExp, in *readerSplits, fields map[string]map[string]bool) {
-	switch {
-	case in == nil:
-		g.collectReads(x.Value, in, fields)
-	case in.served(x):
-		if d, ok := x.Value.(*syntax.DisabledExp); ok {
-			g.collectReads(d.Disabled, in, fields)
-		}
-	case in.roots[x.Call] != nil:
-		g.collectCollection(x.Value, in, fields)
-	default:
-		g.collectReads(x.Value, in, fields)
-	}
-}
-
-// collectCollection adds to fields the stage outs v, the collection a split
-// over one of in's roots forks, reads, as the aligner walks it
-// (aligner.collection): a merge there is of the forks at the reader's own
-// element, one instance its fork names, so it reads the merged value and
-// nothing counting the merge's forks reads, which grows with their number.
-func (g *Graph) collectCollection(v syntax.Exp, in *readerSplits, fields map[string]map[string]bool) {
-	switch x := v.(type) {
-	case *syntax.MergeExp:
-		if !g.mergeGathersNone(x, in.forkRoots()) {
-			g.collectReads(x.Value, in, fields)
-		}
-	case *syntax.DisabledExp:
-		g.collectReads(x.Disabled, in, fields)
-		g.collectCollection(x.Value, in, fields)
-	default:
-		g.collectReads(v, in, fields)
-	}
 }
 
 // addRead records the top-level output a reference reads, "" for the whole

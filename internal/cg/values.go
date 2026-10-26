@@ -20,7 +20,7 @@ import (
 // a scalar, a short string or list, or a small struct, which mrp passes as
 // a few bytes of JSON; above it, the driver would carry kilobytes per
 // instance, which a staged bundle keeps out of its heap. The run's call,
-// base64, which every task reads, is inline in each script under the same
+// encoded, which every task reads, is inline in each script under the same
 // bound, and a file every task stages above it.
 const MaxValueBytes = 4096
 

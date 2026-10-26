@@ -3,7 +3,9 @@ package e2e
 // The comparators decode JSON into ordered objects: mrp passes a struct value
 // through with its producer's key order, so key order is a difference the
 // differential sees. Numbers keep their source token, so an int-vs-float
-// change stays visible too.
+// change stays visible too. They are an oracle independent of
+// types.DecodeJSON, the decoder under test, which folds a repeated key into
+// one and ignores trailing data: these keep the one and reject the other.
 
 import (
 	"bytes"

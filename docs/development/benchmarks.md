@@ -37,6 +37,10 @@ and runs both:
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,002 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 2,502 |
 | `TestScaleMapChain` | `mapchain` | 4 forks | 1,250 forks | 10,004 |
+| `TestScaleZip` | `zip` | 4 forks | 10,000 forks | 10,004 |
+| `TestScaleZipGated` | `zipgated` | 4 forks | 10,000 forks | 10,005 |
+| `TestScaleForkDisabled` | `forkdisabled` | 4 forks | 3,334 forks | 10,005 |
+| `TestScaleSplitBroadcast` | `splitbroadcast` | 4 samples | 2,500 samples | 10,003 |
 
 The default `SCALE_RUN` also selects `TestScaleWideFanin` (#503), which the
 weekly nightly runs as its own job: the generated wide pipeline plus a stage
@@ -46,9 +50,10 @@ channels one workflow takes, run under Nextflow.
 `SCALE_WIDTH` replaces the wide width of every selected bench shape. Each
 default wide width is sized to finish within the 100 minutes one shape runs
 under (`scaleShapeTimeout`). The selected shapes run one after another, so
-the default `SCALE_TIMEOUT` of 700 minutes gives each of the seven (the six
-above and `TestScaleWideFanin`) 100; the nightly runs one shape per job with
-`SCALE_TIMEOUT=100m`.
+the default `SCALE_TIMEOUT` of 1,100 minutes gives each of the eleven (the
+ten above and `TestScaleWideFanin`) 100; the nightly runs one shape per job
+with `SCALE_TIMEOUT=100m`, its `SCALE_RUN` anchored at both ends, as `Split`
+and `Zip` begin other shapes' names.
 
 Each run must complete and gather every fork's or chunk's output. On top of the
 `bench_metrics.py` metrics below, the tier reads a staging probe of every task
@@ -119,7 +124,7 @@ the same way.
 
 ## Fixtures and lanes
 
-Ten fixtures live under `bench/`, exercising the costly patterns the overhead
+Twelve fixtures live under `bench/`, exercising the costly patterns the overhead
 rule targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -166,6 +171,13 @@ rule targets:
   (`GATED`) (`pipeline_w4.mro`, `pipeline_w16.mro`). Under the flat-staging
   gate: each B task stages the one A file at its own index, joined on the
   two roots' ordinals (an aligned `cg.ReadPattern`), never all N of A's.
+- **`mapgather`** — a map call B reading another map call A's files both at
+  its own fork and whole (`f = split A.f`, `all = A.f`, #622), for an A
+  over an entry array (`LIT`) and over a stage's outs (`RUN`)
+  (`pipeline_w4.mro`, `pipeline_w16.mro`). The whole read covers the
+  aligned one, so every B instance reads A through the one `GATHER` of its
+  outs; each B task stages all N of A's files, as each `mrp` job reads
+  them, so the lanes are not under the flat-staging gate.
 - **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
   call over a split stage, whose every chunk and join reads it
   (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into
@@ -192,7 +204,9 @@ reporting with a direct probe-file measurement:
 | `wchar`/`rchar` | trace | aggregate characters written/read (copy-volume proxy) |
 | `refs`       | work-dir scan | task dirs into which the probe file is staged/materialized |
 | `multiplier` | `refs / producers` | **per-file transfer multiplier (ideal = 1)** |
-| `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run` | bytes of the inputs staged into all tasks / stage tasks / the largest task of each stage process |
+| `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run`, and the call each task gets | bytes of the inputs staged into all tasks / stage tasks, each with the run's call it stages as `call.b64` or its script writes / the largest task of each stage process, the call left out, as every `mrp` job's `_jobinfo` carries the invocation too |
+| `stage_call_bytes_max` | `call.b64`, staged or in each `.command.sh` | the most bytes of the run's call one task of each stage process gets |
+| `output_bytes` / `job_bytes` | the `outputs` each `.command.run` header declares, and each job's `files` dir | bytes of the files the stage tasks' declared outputs hold, each path once, what an object store uploads / bytes the stage jobs wrote, the data those outputs carry |
 | `stage_carried_bytes_max` | the `values` here-document in each `.command.sh` | the most bytes of value records one task of each stage process carries: upstream outs passed by value rather than staged |
 | `uploaded_bytes` / `plumbing_uploaded_bytes` | task work dirs | bytes of the files all tasks / plumbing tasks wrote, every hard link counted |
 | `restaged_bytes` | task work dirs and `nxf_stage` | bytes of the files tasks wrote that are a hard link to, or a byte copy of, a file they staged |
@@ -236,7 +250,11 @@ independent checks; the fifth is the differential's:
   reads is referenced where it was staged, not copied into each fork, by a
   non-split stage (#498) or by a split stage's split, chunks or join (#507).
   Per fork such a copy would read flat; per producer, the unit of the data,
-  it grows with the width.
+  it grows with the width. And no group's `output_bytes` per byte of
+  `job_bytes` may be higher at a wider width (within 5%): a file is uploaded
+  once, not once more per fork or element (#623). The jobs' data may grow
+  with the width, as `zip`'s `MKFILES` writes one file per fork; what the
+  tasks upload beyond it may not.
 - **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make
