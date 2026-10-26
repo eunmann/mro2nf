@@ -213,6 +213,42 @@ func TestZipPartnerUnderLiteralMaster(t *testing.T) {
 	wantArgs(t, "ZIP_LITERAL.INNER_LONG.PAIR fork1", got, `{"a":2,"b":30}`)
 }
 
+// TestZipPartnerOfOtherLength: a partner's elements are its own output's,
+// whatever the length of the literal that fixes the root's forks: TWO.xs
+// is shorter than SHORT's three and FOUR.xs longer, and neither post fails
+// on it, as core's known-length check (expandForkFromObj) would, since mrp
+// reads each element by index (ZIP_LITERAL/SHORT/fork2: a = null, b = 30).
+func TestZipPartnerOfOtherLength(t *testing.T) {
+	f := loadFixture(t, "zip_literal")
+
+	entry := f.next("entry")
+	if err := f.g.PostEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	two := f.outs("ZIP_LITERAL.TWO", nil, `{"xs":[1,2]}`)
+	four := f.outs("ZIP_LITERAL.FOUR", nil, `{"xs":[1,2,3,4]}`)
+
+	twos := partnerItems(t, f.post(two), "ZIP_LITERAL.SHORT", "ZIP_LITERAL.TWO", "xs")
+	fours := partnerItems(t, f.post(four), "ZIP_LITERAL.LONG", "ZIP_LITERAL.FOUR", "xs")
+
+	if d := cmp.Diff([]string{"0", "1", AbsentName}, slices.Sorted(maps.Keys(twos))); d != "" {
+		t.Errorf("TWO's partner elements of SHORT (-want +got):\n%s", d)
+	}
+
+	if d := cmp.Diff([]string{"0", "1", "2", "3", AbsentName}, slices.Sorted(maps.Keys(fours))); d != "" {
+		t.Errorf("FOUR's partner elements of LONG (-want +got):\n%s", d)
+	}
+
+	short := elementItems(t, entry, "ZIP_LITERAL.SHORT")
+	if len(short) != 3 {
+		t.Fatalf("the entry posted %d forks of SHORT, mrp ran 3", len(short))
+	}
+
+	_, got := f.args("ZIP_LITERAL.SHORT", short[2], twos[AbsentName])
+	wantArgs(t, "ZIP_LITERAL.SHORT fork2", got, `{"a":null,"b":30}`)
+}
+
 // TestZipPartnerMapKeys: zipped maps need not share keys at run time. An
 // instance stages the other map's element by its key's token, and a key
 // that map lacks reads null (mrp ZIP_RUNTIME_MAP: BY_AX fork_a a = 10,

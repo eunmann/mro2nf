@@ -147,7 +147,12 @@ func (f *runFlags) instance(g *cg.Graph, inst cg.Instance) (job.Instance, error)
 
 	f.rt.Version = job.Versions(g.MroPaths())
 
-	return job.Instance{Stage: stage, ForkID: inst.ForkID()}, nil
+	forkID, err := g.ForkID(inst.Node, inst.Fork, inst.Lens)
+	if err != nil {
+		return job.Instance{}, fmt.Errorf("run: %w", err)
+	}
+
+	return job.Instance{Stage: stage, ForkID: forkID}, nil
 }
 
 func (f *runFlags) split(ctx context.Context, g *cg.Graph, in job.Instance, args core.LazyArgumentMap) error {
@@ -347,7 +352,7 @@ func (f *runFlags) main(ctx context.Context, g *cg.Graph, in job.Instance, args 
 		return finished{}, err
 	}
 
-	return finishedOf(outs, opts)
+	return finishedOf(outs, in.Stage.Outs, opts)
 }
 
 // writeChunkOuts writes the _outs of the chunk whose job's metadata dir is
@@ -402,14 +407,15 @@ func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgu
 		return finished{}, err
 	}
 
-	return finishedOf(final, opts)
+	return finishedOf(final, in.Stage.Outs, opts)
 }
 
 // finishedOf is the instance's last job's _outs, raw, as its post takes
 // them, with opts: each output's JSON compact, in its encoded key order
-// and number lexemes, its file leaves where the job named them.
-func finishedOf(raw json.RawMessage, opts shim.Opts) (finished, error) {
-	payload, err := outsPayload(raw)
+// and number lexemes, its file leaves where the job named them; none for a
+// stage with no outputs (jobOuts).
+func finishedOf(raw json.RawMessage, params *syntax.OutParams, opts shim.Opts) (finished, error) {
+	payload, err := jobOuts(raw, params != nil && len(params.List) > 0)
 	if err != nil {
 		return finished{}, err
 	}
@@ -563,7 +569,7 @@ func chunkNames(dir string) ([]string, error) {
 // they name staged or named by reference as w says, and returns the records
 // of the references.
 func writeOutsBundle(dir string, raw json.RawMessage, params []*syntax.StructMember, w itemWriter) ([]string, error) {
-	payload, err := outsPayload(raw)
+	payload, err := jobOuts(raw, len(params) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -571,21 +577,19 @@ func writeOutsBundle(dir string, raw json.RawMessage, params []*syntax.StructMem
 	return w.write(dir, payload, params)
 }
 
-// outsPayload is a job's _outs by output, each value in its encoded key
-// order and number lexemes. The adapter writes a stage with no outputs an
-// _outs of "", which carries no outs.
-func outsPayload(raw json.RawMessage) (map[string]any, error) {
-	v, err := types.DecodeJSON(raw)
-	if err != nil {
-		return nil, fmt.Errorf("decode _outs: %w", err)
+// jobOuts is a job's _outs, raw, by output, each value in its encoded key
+// order and number lexemes, as mrp reads them (core/stage.go:1209-1214,
+// :1280-1292): a stage with no outputs has none, whatever its job wrote,
+// and one with outputs must have written an object, null, or the empty
+// string the adapter writes for none.
+func jobOuts(raw json.RawMessage, hasOuts bool) (map[string]any, error) {
+	if !hasOuts {
+		return map[string]any{}, nil
 	}
 
-	payload := map[string]any{}
-
-	if obj, ok := types.AsObject(v); ok {
-		for _, m := range obj {
-			payload[m.Key] = m.Value
-		}
+	payload, err := rawToMap(raw)
+	if err != nil {
+		return nil, fmt.Errorf("_outs: %w", err)
 	}
 
 	return payload, nil

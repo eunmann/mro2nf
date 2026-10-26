@@ -37,16 +37,6 @@ const (
 	maxAlarmLine     = 1 << 20
 )
 
-// threadEnvs are jobmanagers/config.json's thread_envs, which mrp sets to a
-// job's threads (core/jobmanager.go:65 threadEnvs).
-func threadEnvs() []string {
-	return []string{
-		"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS",
-		"OMP_NUM_THREADS", "OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS",
-		"TF_NUM_THREADS",
-	}
-}
-
 // job is one phase job: mrp's shell name for it, its name, its metadata
 // and its resolved resources.
 type job struct {
@@ -155,7 +145,7 @@ func (j *job) env() []string {
 	envs := map[string]string{}
 
 	n := strconv.Itoa(int(math.Ceil(j.res.Threads)))
-	for _, k := range threadEnvs() {
+	for _, k := range Settings().ThreadEnvs {
 		envs[k] = n
 	}
 

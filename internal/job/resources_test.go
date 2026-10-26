@@ -65,7 +65,7 @@ func TestClusterGrant(t *testing.T) {
 
 	checkGrants(t, Runtime{}, []grantCase{
 		{"defaults", nil, nil, core.JobResources{Threads: 1, MemGB: 1, VMemGB: 4}},
-		{"fractions", &core.JobResources{Threads: 0.333, MemGB: mem}, nil, core.JobResources{Threads: 1, MemGB: mem, VMemGB: mem + extraVMemGB}},
+		{"fractions", &core.JobResources{Threads: 0.333, MemGB: mem}, nil, core.JobResources{Threads: 1, MemGB: mem, VMemGB: mem + 3}},
 		{"def over using", &core.JobResources{Threads: 4, MemGB: 8, Special: "a"}, &core.JobResources{MemGB: 2, Special: "b"}, core.JobResources{Threads: 4, MemGB: 2, VMemGB: 5, Special: "b"}},
 		{"adaptive", &core.JobResources{Threads: -2.5, MemGB: -6, VMemGB: -2}, nil, core.JobResources{Threads: 3, MemGB: 6, VMemGB: 9}},
 		{"oversized", &core.JobResources{Threads: 64, MemGB: 200}, nil, core.JobResources{Threads: 64, MemGB: 200, VMemGB: 203}},

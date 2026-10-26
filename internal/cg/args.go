@@ -86,7 +86,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, core.LazyArgumentMap, error)
 	r := &resolver{g: g, st: s}
 
 	in := Instance{Node: st.Fqid, Fork: fork, Lens: lens}
-	if in.Disabled, err = r.disabled(st, fork); err != nil || in.Disabled {
+	if in.Disabled, err = r.disabled(st, fork, lens); err != nil || in.Disabled {
 		return in, nil, err
 	}
 

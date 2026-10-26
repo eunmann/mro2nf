@@ -335,19 +335,23 @@ func fromCore(v json.Marshaler) json.Marshaler {
 }
 
 // outs is the fork's outs: all null where its expansion disabled it, as
-// core writeDisable writes them (stage.go:929, makeOutArgs).
+// core writeDisable writes them (stage.go:929, makeOutArgs) and its readers
+// read them back.
 func (f *Fork) outs() (LazyArgumentMap, error) {
 	st, ok := f.node.call.(*syntax.CallGraphStage)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s is no stage", ErrNotStaged, f.fqname)
 	}
 
-	if f.disabled {
-		out := LazyArgumentMap{}
-		if ps := st.Callable().GetOutParams(); ps != nil {
-			for _, p := range ps.List {
-				out[p.GetId()] = json.RawMessage("null")
-			}
+	if f.disabledState {
+		raw, err := json.Marshal(makeOutArgs(f.OutParams(), "", true))
+		if err != nil {
+			return nil, fmt.Errorf("outs of disabled %s: %w", f.fqname, err)
+		}
+
+		var out LazyArgumentMap
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, fmt.Errorf("outs of disabled %s: %w", f.fqname, err)
 		}
 
 		return out, nil

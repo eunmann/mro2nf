@@ -5,16 +5,214 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// ErrUnresolved reports a fork root whose forks the task could not count.
-var ErrUnresolved = errors.New("fork root unresolved")
+var (
+	// ErrUnresolved reports a fork root whose forks the task could not count.
+	ErrUnresolved = errors.New("fork root unresolved")
+
+	// ErrInvalidOuts reports outs mrp's output checks reject.
+	ErrInvalidOuts = errors.New("invalid outs")
+
+	errOtherKey = errors.New("not the fork's own key")
+	errForkMode = errors.New("invalid fork mode")
+)
+
+// ForkRange lists the indices of the forks a split of mode expands from
+// obj, the value of a stage output, as core's expandForkFromObj ranges them
+// (fork.go:1657): none for null, an array's in order, a map's keys sorted.
+// It omits core's check of obj's length against a source of known length:
+// core expands only a source of unknown length from a stage's outs
+// (Fork.expand), and a split zipped with a literal of known length reads its
+// output element by element, null past its end (zip_literal).
+func ForkRange(mode syntax.CallMode, obj json.Marshaler) ([]syntax.CollectionIndex, error) {
+	if obj == nil {
+		return nil, nil
+	}
+
+	switch mode {
+	case syntax.ModeArrayCall:
+		n, err := getUnknownLength(obj)
+		if err != nil {
+			return nil, err
+		}
+
+		idx := make([]syntax.CollectionIndex, n)
+		for j := range idx {
+			idx[j] = arrayIndexFork(j)
+		}
+
+		return idx, nil
+	case syntax.ModeMapCall:
+		keys, err := getUnknownKeys(obj)
+		if err != nil {
+			return nil, err
+		}
+
+		sort.Strings(keys)
+
+		idx := make([]syntax.CollectionIndex, len(keys))
+		for j, k := range keys {
+			idx[j] = mapKeyFork(k)
+		}
+
+		return idx, nil
+	default:
+		return nil, fmt.Errorf("%w %s", errForkMode, mode.String())
+	}
+}
 
 // Part is the fork id part of root at index ix.
 func Part(root *syntax.CallGraphStage, ix syntax.CollectionIndex) *ForkSourcePart {
 	return &ForkSourcePart{Split: root.Split(), Id: convertForkPart(ix)}
+}
+
+// CountedPart is root's part at index ix among the n forks of root under
+// the parts before it, as core's expansion leaves it (fork.go:1657
+// expandForkFromObj, :350 expandStaticForkPart): root's split, and a range
+// of length n, which ForkId.ForkIdString reads where root's source is of
+// unknown length.
+func CountedPart(root *syntax.CallGraphStage, ix syntax.CollectionIndex, n int) *ForkSourcePart {
+	p := Part(root, ix)
+	if p.Id.Mode() == syntax.ModeMapCall {
+		p.Range = ownKeyRange{key: p.Id.MapKey(), n: n}
+	} else {
+		p.Range = arrayLengthRange(n)
+	}
+
+	return p
+}
+
+// ownKeyRange is the range of a map part of n keys of which a task knows
+// only its own: core's mapKeyRange (expandForkFromObj) lists every key of
+// the source, which the task did not stage.
+type ownKeyRange struct {
+	key string
+	n   int
+}
+
+func (r ownKeyRange) Allow(i syntax.CollectionIndex) error {
+	if i.MapKey() != r.key {
+		return fmt.Errorf("%w: %q, the fork's is %q", errOtherKey, i.MapKey(), r.key)
+	}
+
+	return nil
+}
+
+func (r ownKeyRange) Length() int { return r.n }
+
+// ForkID is the id mrp names the fork of node fqid at fork by, its fork
+// dir's and its jobs' (ForkId.ForkIdString): the id of the node's fork that
+// fork matches (Node.matchFork), whose parts carry their ranges
+// (CountedPart).
+func (t *TopNode) ForkID(fqid string, fork ForkId) (string, error) {
+	node, err := t.node(fqid)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := node.matchFork(nil, fork)
+	if err != nil {
+		return "", fmt.Errorf("fork of %s at %s: %w", fqid, fork.GoString(), err)
+	}
+
+	id, err := f.forkId.ForkIdString()
+	if err != nil {
+		return "", fmt.Errorf("fork id of %s at %s: %w", fqid, fork.GoString(), err)
+	}
+
+	return id, nil
+}
+
+// Disabled reports whether the fork of node fqid at fork is disabled, as
+// core's Fork.disabled decides it (stage.go:883): a part of no forks, or a
+// disable binding that resolves true. A binding that fails to resolve to a
+// bool, or reads what the task did not stage, fails.
+func (t *TopNode) Disabled(fqid string, fork ForkId) (bool, error) {
+	node, err := t.node(fqid)
+	if err != nil {
+		return false, err
+	}
+
+	t.unstaged = nil
+
+	off, err := newFork(node, fork).disabled()
+	if err != nil {
+		return false, fmt.Errorf("disabled state of %s at %s: %w", fqid, fork.GoString(), t.withUnstaged(err))
+	}
+
+	return off, nil
+}
+
+// Disables reports whether gate, the gate of a disable-wrapped value or a
+// disable binding, disables at fork, as core's resolveDisabledExp decides it
+// (resolve.go:248).
+func (t *TopNode) Disables(gate syntax.Exp, fork ForkId) (bool, error) {
+	t.unstaged = nil
+
+	ready, off, err := t.gate(gate, fork, 0)
+
+	switch {
+	case err != nil:
+		return false, t.withUnstaged(err)
+	case !ready:
+		return false, t.notReady()
+	default:
+		return off, nil
+	}
+}
+
+// OutArgs is the _outs mrp writes before a job runs, each output named by
+// params pre-populated with its files below filesPath, or each null where
+// nullAll (stage.go:57 makeOutArgs).
+func OutArgs(params *syntax.OutParams, filesPath string, nullAll bool) MarshalerMap {
+	return makeOutArgs(params, filesPath, nullAll)
+}
+
+// VerifyOutput checks outs, the outs of stage fqid's fork at fork, as mrp
+// checks a finished stage's (stage.go:764 Fork.verifyOutput): an error
+// fails it, wrapping ErrInvalidOuts.
+func (t *TopNode) VerifyOutput(fqid string, fork ForkId, outs LazyArgumentMap) error {
+	node, err := t.node(fqid)
+	if err != nil {
+		return err
+	}
+
+	if ok, msg := newFork(node, fork).verifyOutput(outs); !ok {
+		return fmt.Errorf("%w of %s: %s", ErrInvalidOuts, fqid, msg)
+	}
+
+	return nil
+}
+
+// PipelineOutputs resolves the outs of pipeline fqid's fork at fork and
+// checks them, as mrp's Fork.stepPipeline does (stage.go:1358-1366,
+// resolvePipelineOutputs then verifyPipelineOutput): the outs and their
+// type, or an error, which wraps ErrInvalidOuts where the check rejects
+// them.
+func (t *TopNode) PipelineOutputs(fqid string, fork ForkId) (json.Marshaler, syntax.Type, error) {
+	node, err := t.node(fqid)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	t.unstaged = nil
+
+	outs, typ, err := node.resolvePipelineOutputs(fork)
+	if err != nil {
+		return nil, nil, fmt.Errorf("outs of %s: %w", fqid, t.withUnstaged(err))
+	}
+
+	if f := newFork(node, fork); len(f.OutParams().List) > 0 {
+		if ok, msg := f.verifyPipelineOutput(outs, typ); !ok {
+			return nil, nil, fmt.Errorf("%w of %s: %s", ErrInvalidOuts, fqid, msg)
+		}
+	}
+
+	return outs, typ, nil
 }
 
 // Index is the index of root's part in fork, and false where fork has none.
@@ -91,13 +289,6 @@ func (t *TopNode) splitRemoved(root *syntax.CallGraphStage, fork ForkId) bool {
 	return err == nil && !split
 }
 
-// Elements is the elements of v where it is an array a resolution returned.
-func Elements(v json.Marshaler) ([]json.Marshaler, bool) {
-	a, ok := v.(marshallerArray)
-
-	return a, ok
-}
-
 // Inputs resolves the input bindings of stage fqid at fork as the job's
 // _args resolve them (core Node.resolveInputs). An input that reads only
 // elements its collection lacks keeps the value resolved around them, as
@@ -131,22 +322,6 @@ func (t *TopNode) withUnstaged(err error) error {
 	}
 
 	return fmt.Errorf("%w (%w)", err, t.notReady())
-}
-
-// Resolve evaluates exp of type typ at fork (core TopNode.resolve).
-func (t *TopNode) Resolve(exp syntax.Exp, typ syntax.Type, fork ForkId) (json.Marshaler, error) {
-	t.unstaged = nil
-
-	ready, v, err := t.resolve(exp, typ, fork, 0)
-
-	switch {
-	case err != nil:
-		return v, t.withUnstaged(err)
-	case !ready:
-		return nil, t.notReady()
-	default:
-		return v, nil
-	}
 }
 
 // onlyMissing reports whether every error err holds is a missing element:

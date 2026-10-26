@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
@@ -109,28 +108,23 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 }
 
 // pipelineOuts resolves the invocation's pipeline outs from the staged
-// stage outs and checks them. It returns them with their type, an array or
-// a map of the pipeline's outs for a top-level map call.
+// stage outs and checks them, as mrp does (mrcore PipelineOutputs). It
+// returns them with their type, an array or a map of the pipeline's outs
+// for a top-level map call.
 func (g *Graph) pipelineOuts(s *stagedStore) (json.Marshaler, syntax.Type, error) {
-	r := &resolver{g: g, st: s}
-
 	ro := g.root.ResolvedOutputs()
 	if ro == nil || ro.Exp == nil {
 		return core.MarshalerMap{}, nil, nil
 	}
 
-	v, err := r.resolve(ro.Exp, ro.Type, nil)
+	r := &resolver{g: g, st: s}
+
+	v, t, err := r.core().PipelineOutputs(g.root.GetFqid(), nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	if ps := g.root.Callable().GetOutParams(); ps != nil && len(ps.List) > 0 {
-		if err := g.verifyPipelineOutputs(v, ro.Type); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	return v, ro.Type, nil
+	return v, t, nil
 }
 
 // writeSourceGates writes into the pipestance at ps the outs of every
@@ -162,7 +156,12 @@ func (g *Graph) writeSourceGates(s *stagedStore, ps string) error {
 				return fmt.Errorf("gate %s: %w", id, err)
 			}
 
-			path := filepath.Join(ps, filepath.FromSlash(strings.ReplaceAll(id, ".", "/")), f.ID(lens), "_outs")
+			fid, err := g.ForkID(id, f, lens)
+			if err != nil {
+				return fmt.Errorf("gate %s: %w", id, err)
+			}
+
+			path := filepath.Join(ps, filepath.FromSlash(strings.ReplaceAll(id, ".", "/")), fid, "_outs")
 			if err := writeJSONFile(path, outs); err != nil {
 				return err
 			}
@@ -206,42 +205,6 @@ func (g *Graph) postProcess(ctx context.Context, ps string) error {
 	}
 
 	pipe.PostProcess()
-
-	return nil
-}
-
-// verifyPipelineOutputs checks resolved pipeline outs as mrp's
-// Fork.verifyPipelineOutput does (core/stage.go:788-833), with Martian's own
-// MarshalerMap.ValidatePipelineOutputs at each struct, dropping alarms as at
-// mrp's default enforcement level.
-func (g *Graph) verifyPipelineOutputs(v json.Marshaler, t syntax.Type) error {
-	switch t := t.(type) {
-	case *syntax.TypedMapType:
-		if m, ok := v.(core.MarshalerMap); ok {
-			for _, e := range m {
-				if err := g.verifyPipelineOutputs(e, t.Elem); err != nil {
-					return err
-				}
-			}
-		}
-	case *syntax.ArrayType:
-		if a, ok := mrcore.Elements(v); ok {
-			for _, e := range a {
-				if err := g.verifyPipelineOutputs(e, t.Elem); err != nil {
-					return err
-				}
-			}
-		}
-	case *syntax.StructType:
-		m, ok := v.(core.MarshalerMap)
-		if !ok || len(t.Members) == 0 {
-			return nil
-		}
-
-		if err, alarms := m.ValidatePipelineOutputs(g.types, t); err != nil {
-			return fmt.Errorf("%w of the pipeline: %w%s", errInvalidOuts, err, alarms)
-		}
-	}
 
 	return nil
 }

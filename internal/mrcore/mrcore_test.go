@@ -241,10 +241,10 @@ func TestSplitElementStaged(t *testing.T) {
 	top := compile(t, gather, s)
 	sq := stage(t, top, "TOP.SQ")
 
-	v, err := top.Resolve(sq.ResolvedInputs()["x"].Exp, top.types.Get(syntax.TypeId{Tname: syntax.KindInt}),
-		ForkId{Part(sq.ForkRoots()[0], arrayIndexFork(1))})
-	if err != nil || compact(t, v) != "7" {
-		t.Errorf("x at SQ fork 1 = %v, %v; want the staged 7", v, err)
+	ready, v, err := top.resolve(sq.ResolvedInputs()["x"].Exp, top.types.Get(syntax.TypeId{Tname: syntax.KindInt}),
+		ForkId{Part(sq.ForkRoots()[0], arrayIndexFork(1))}, 0)
+	if err != nil || !ready || compact(t, v) != "7" {
+		t.Errorf("x at SQ fork 1 = %v, %t, %v; want the staged 7", v, ready, err)
 	}
 }
 
@@ -316,9 +316,7 @@ func TestInputsNestedGather(t *testing.T) {
 
 	top := compile(t, nested, s)
 
-	ro := top.allNodes["TOP"].call.ResolvedOutputs()
-
-	v, err := top.Resolve(ro.Exp, ro.Type, nil)
+	v, _, err := top.PipelineOutputs("TOP", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,6 +335,33 @@ func TestInputsNestedGather(t *testing.T) {
 	sum, _, err := top.Inputs("TOP.SUM", nil)
 	if err != nil || compact(t, sum) != `{"ys":[11,21]}` {
 		t.Errorf("SUM = %v, %v", sum, err)
+	}
+}
+
+// TestForkID: a fork's id is core's ForkIdString of its counted parts: a
+// part of variable length starts a new index after '_', one of a single
+// fork folds into the index before it, and a map part writes its key.
+func TestForkID(t *testing.T) {
+	top := compile(t, nested, fakeStore{})
+	sq := stage(t, top, "TOP.INNER.SQ").ForkRoots()
+	gtop := compile(t, gather, fakeStore{})
+	sqm := stage(t, gtop, "TOP.SQM").ForkRoots()[0]
+
+	for _, tc := range []struct {
+		node string
+		top  *TopNode
+		fork ForkId
+		want string
+	}{
+		{"TOP.INNER.SQ", top, ForkId{CountedPart(sq[0], arrayIndexFork(0), 2), CountedPart(sq[1], arrayIndexFork(1), 2)}, "fork0_fork1"},
+		{"TOP.INNER.SQ", top, ForkId{CountedPart(sq[0], arrayIndexFork(1), 2), CountedPart(sq[1], arrayIndexFork(0), 1)}, "fork1"},
+		{"TOP.SQM", gtop, ForkId{CountedPart(sqm, mapKeyFork("a"), 2)}, "fork_a"},
+		{"TOP.MK", top, nil, "fork0"},
+	} {
+		got, err := tc.top.ForkID(tc.node, tc.fork)
+		if err != nil || got != tc.want {
+			t.Errorf("ForkID of %s at %s = %q, %v; want %q", tc.node, tc.fork.GoString(), got, err, tc.want)
+		}
 	}
 }
 
@@ -393,9 +418,8 @@ func TestInputsKnownInner(t *testing.T) {
 	}}
 
 	top := compile(t, knownInner, s)
-	ro := top.allNodes["TOP"].call.ResolvedOutputs()
 
-	v, err := top.Resolve(ro.Exp, ro.Type, nil)
+	v, _, err := top.PipelineOutputs("TOP", nil)
 	if err != nil || compact(t, v) != `{"yss":[[1,2],[3,4]]}` {
 		t.Errorf("TOP outs = %v, %v", v, err)
 	}
@@ -488,6 +512,39 @@ func TestInputsGatedLiteral(t *testing.T) {
 	}
 }
 
+// TestDisabled: a fork is disabled as core's Fork.disabled decides: by a
+// gate that reads true, not by one that reads false or null, and by a part
+// of no forks whatever its gates; a gate the task did not stage fails.
+func TestDisabled(t *testing.T) {
+	for off, want := range map[string]bool{"true": true, "false": false, "null": false} {
+		top := compile(t, gated, fakeStore{outs: map[string]string{"TOP.FLAG|": `{"off":` + off + `,"items":{}}`}})
+		sq := stage(t, top, "TOP.LIT.SQ")
+
+		got, err := top.Disabled(sq.Fqid, nil)
+		if err != nil || got != want {
+			t.Errorf("off=%s: Disabled of %s = %t, %v; want %t", off, sq.Fqid, got, err, want)
+		}
+
+		got, err = top.Disables(sq.Disabled()[0], nil)
+		if err != nil || got != want {
+			t.Errorf("off=%s: Disables = %t, %v; want %t", off, got, err, want)
+		}
+	}
+
+	top := compile(t, gated, fakeStore{outs: map[string]string{}})
+	if _, err := top.Disabled("TOP.LIT.SQ", nil); !errors.Is(err, ErrNotStaged) {
+		t.Errorf("Disabled with its gate unstaged: %v, want ErrNotStaged", err)
+	}
+
+	each := stage(t, top, "TOP.EACH")
+	for n, want := range map[int]bool{0: true, 2: false} {
+		got, err := top.Disabled(each.Fqid, ForkId{CountedPart(each.ForkRoots()[0], arrayIndexFork(0), n)})
+		if err != nil || got != want {
+			t.Errorf("Disabled of %s, a part of %d forks = %t, %v; want %t", each.Fqid, n, got, err, want)
+		}
+	}
+}
+
 // TestFailuresAreLoud: an unknown node, an unstaged read and a root whose
 // count reads what the task did not stage each fail.
 func TestFailuresAreLoud(t *testing.T) {
@@ -497,9 +554,8 @@ func TestFailuresAreLoud(t *testing.T) {
 		t.Error("Inputs of an unknown node succeeded")
 	}
 
-	sum := stage(t, top, "TOP.SUM")
-	if _, err := top.Resolve(sum.ResolvedInputs()["ys"].Exp, sum.ResolvedInputs()["ys"].Type, nil); !errors.Is(err, ErrNotStaged) {
-		t.Errorf("Resolve of an unstaged gather: %v, want ErrNotStaged", err)
+	if _, _, err := top.Inputs("TOP.SUM", nil); !errors.Is(err, ErrNotStaged) {
+		t.Errorf("Inputs of an unstaged gather: %v, want ErrNotStaged", err)
 	}
 
 	sq := stage(t, top, "TOP.SQ")
@@ -509,6 +565,40 @@ func TestFailuresAreLoud(t *testing.T) {
 
 	if _, ok := (ForkId{}).Index(sq.ForkRoots()[0]); ok {
 		t.Error("Index of a root an empty fork lacks")
+	}
+}
+
+// TestForkRange: a stage output's forks are core's expandForkFromObj range
+// of it: none for null or empty, an array's indices, a map's keys sorted;
+// a value of the wrong shape or an unknown mode fails.
+func TestForkRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode syntax.CallMode
+		obj  json.Marshaler
+		want []syntax.CollectionIndex
+		fail bool
+	}{
+		{name: "nil", mode: syntax.ModeArrayCall},
+		{name: "null array", mode: syntax.ModeArrayCall, obj: json.RawMessage("null"), want: []syntax.CollectionIndex{}},
+		{name: "null map", mode: syntax.ModeMapCall, obj: json.RawMessage("null"), want: []syntax.CollectionIndex{}},
+		{name: "empty array", mode: syntax.ModeArrayCall, obj: json.RawMessage("[]"), want: []syntax.CollectionIndex{}},
+		{name: "array", mode: syntax.ModeArrayCall, obj: json.RawMessage(`[5, null, {"a": 1}]`), want: []syntax.CollectionIndex{arrayIndexFork(0), arrayIndexFork(1), arrayIndexFork(2)}},
+		{name: "map", mode: syntax.ModeMapCall, obj: json.RawMessage(`{"b": 1, "a": 2, "c d": 3}`), want: []syntax.CollectionIndex{mapKeyFork("a"), mapKeyFork("b"), mapKeyFork("c d")}},
+		{name: "map as array", mode: syntax.ModeArrayCall, obj: json.RawMessage(`{"a": 1}`), fail: true},
+		{name: "array as map", mode: syntax.ModeMapCall, obj: json.RawMessage(`[1, 2]`), fail: true},
+		{name: "single mode", mode: syntax.ModeSingleCall, obj: json.RawMessage(`[1]`), fail: true},
+	} {
+		got, err := ForkRange(tc.mode, tc.obj)
+		if (err != nil) != tc.fail {
+			t.Errorf("%s: ForkRange error %v, want failure %t", tc.name, err, tc.fail)
+
+			continue
+		}
+
+		if d := cmp.Diff(tc.want, got); d != "" {
+			t.Errorf("%s: ForkRange (-want +got):\n%s", tc.name, d)
+		}
 	}
 }
 
@@ -549,12 +639,38 @@ func TestForkIdKey(t *testing.T) {
 	if !a.determined() || u.determined() {
 		t.Errorf("determined: %v %v, want true false", a.determined(), u.determined())
 	}
+}
 
-	if _, ok := Elements(marshallerArray{json.RawMessage("1")}); !ok {
-		t.Error("Elements of a resolved array")
+// TestPipelineOutputs: a pipeline's outs resolve and pass mrp's check of
+// each struct; one of the wrong type fails it, as do a stage's outs of the
+// wrong type, and a read the task did not stage.
+func TestPipelineOutputs(t *testing.T) {
+	s := gatherStore()
+	s.outs["TOP.SQ|fork0"] = s.outs["TOP.SQ|0"]
+	s.outs["TOP.SUM|"], s.outs["TOP.SUMM|"] = `{"s":14}`, `{"s":30}`
+	top := compile(t, gather, s)
+
+	v, typ, err := top.PipelineOutputs("TOP", nil)
+	if err != nil || compact(t, v) != `{"s":14,"sm":30}` || typ == nil {
+		t.Errorf("PipelineOutputs = %v, %v, %v", v, typ, err)
 	}
 
-	if _, ok := Elements(json.RawMessage("[1]")); ok {
-		t.Error("Elements of raw JSON")
+	f := newFork(top.allNodes["TOP"], nil)
+	if ok, _ := f.verifyPipelineOutput(MarshalerMap{"s": json.RawMessage("1.5"), "sm": json.RawMessage("1")}, typ); ok {
+		t.Error("pipeline outs s = 1.5 pass mrp's check")
+	}
+
+	if err := top.VerifyOutput("TOP.SUM", nil, LazyArgumentMap{"s": json.RawMessage("1.5")}); !errors.Is(err, ErrInvalidOuts) {
+		t.Errorf("VerifyOutput of s = 1.5: %v, want ErrInvalidOuts", err)
+	}
+
+	if err := top.VerifyOutput("TOP.SUM", nil, LazyArgumentMap{"s": json.RawMessage("2")}); err != nil {
+		t.Errorf("VerifyOutput of s = 2: %v", err)
+	}
+
+	delete(s.outs, "TOP.SUMM|")
+
+	if _, _, err := top.PipelineOutputs("TOP", nil); !errors.Is(err, ErrNotStaged) {
+		t.Errorf("PipelineOutputs without SUMM staged: %v, want ErrNotStaged", err)
 	}
 }

@@ -373,7 +373,7 @@ func (s *standIn) resolvedReads(spec ArgsSpec) map[string]int {
 		s.t.Fatal(err)
 	}
 
-	fork, _, err := instanceFork(st, staged)
+	fork, lens, err := instanceFork(st, staged)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func (s *standIn) resolvedReads(spec ArgsSpec) map[string]int {
 	rec := &recordingStore{store: staged, read: map[string]map[string]bool{}}
 	r := &resolver{g: s.g, st: rec}
 
-	if off, err := r.disabled(st, fork); err == nil && !off {
+	if off, err := r.disabled(st, fork, lens); err == nil && !off {
 		if _, _, err := r.args(st, fork); err != nil {
 			s.t.Fatalf("args of %s: %v", spec.Node, err)
 		}

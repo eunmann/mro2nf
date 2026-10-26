@@ -1,11 +1,8 @@
 package cg
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
-
-	"github.com/martian-lang/martian/martian/core"
 )
 
 // TestPostRejectsInvalidOuts: BAD's 1.5 for its out int fails its post, as
@@ -24,7 +21,8 @@ func TestPostRejectsInvalidOuts(t *testing.T) {
 
 // TestWriteOutsRejectsInvalidOuts: a pipeline out of the wrong type fails
 // the pipeline outs; an int passes. Resolution already filters each ref to
-// its declared type, so the struct check is pinned on its own.
+// its declared type, so the struct check is pinned on its own
+// (mrcore TestPipelineOutputs).
 func TestWriteOutsRejectsInvalidOuts(t *testing.T) {
 	f := loadFixture(t, "bad_out_type")
 
@@ -36,11 +34,6 @@ func TestWriteOutsRejectsInvalidOuts(t *testing.T) {
 	use = f.outs("BOT.USE", nil, `{"j":2}`)
 	if got, err := f.writeOuts(use); err != nil || got != `{"j":2}` {
 		t.Errorf("pipeline outs j = 2: %s, %v", got, err)
-	}
-
-	bad := core.MarshalerMap{"j": json.RawMessage(`1.5`)}
-	if err := f.g.verifyPipelineOutputs(bad, f.g.root.ResolvedOutputs().Type); !errors.Is(err, errInvalidOuts) {
-		t.Errorf("check of pipeline outs j = 1.5: %v, want %v", err, errInvalidOuts)
 	}
 }
 

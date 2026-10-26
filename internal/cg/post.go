@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
@@ -21,7 +22,7 @@ import (
 const minOrdinalWidth = 4
 
 var (
-	errInvalidOuts = errors.New("invalid stage outs")
+	errInvalidOuts = mrcore.ErrInvalidOuts
 	errMultiSource = errors.New("fork root reads several stages")
 	errPostDirs    = errors.New("a post writes its outs into a Fields dir, a Values file and a FieldRefs file, " +
 		"and the elements it feeds into a Forks dir, a ForkValues file and a ForkRefs file")
@@ -107,7 +108,8 @@ func (g *Graph) posting(spec PostSpec) (*stagedStore, error) {
 
 	s.addOuts(in, spec.Outs)
 
-	if err := g.verifyOutputs(st, s, in.Fork); err != nil {
+	r := &resolver{g: g, st: s}
+	if err := r.verifyOutput(st, in.Fork); err != nil {
 		return nil, err
 	}
 
@@ -185,23 +187,18 @@ func (g *Graph) sortedRoots() []*syntax.CallGraphStage {
 	return out
 }
 
-// verifyOutputs checks a stage's outs as mrp's Fork.verifyOutput does
-// (core/stage.go:764-786) with Martian's own LazyArgumentMap.ValidateOutputs:
-// an error fails the stage, and an alarm is dropped, as at mrp's default
-// enforcement level. mrp's --strict mode is not supported.
-func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fork) error {
-	params := st.Callable().GetOutParams()
-	if params == nil || len(params.List) == 0 {
-		return nil
-	}
-
-	outs, err := s.outs(st, fork)
+// verifyOutput checks st's outs at fork as mrp checks a finished stage's
+// (mrcore VerifyOutput): an error fails the stage, and an alarm is dropped,
+// as at mrp's default enforcement level. mrp's --strict mode is not
+// supported.
+func (r *resolver) verifyOutput(st *syntax.CallGraphStage, fork Fork) error {
+	outs, err := r.st.outs(st, fork)
 	if err != nil {
 		return err
 	}
 
-	if err, alarms := outs.ValidateOutputs(g.types, params); err != nil {
-		return fmt.Errorf("%w of %s: %w%s", errInvalidOuts, st.Fqid, err, alarms)
+	if err := r.core().VerifyOutput(st.Fqid, coreFork(fork), outs); err != nil {
+		return fmt.Errorf("verify outs at fork %s: %w", fork, err)
 	}
 
 	return nil
@@ -292,7 +289,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	switch {
 	case err != nil:
 	case values:
-		idx = c.indices()
+		idx = c.indices
 	default:
 		idx, err = w.r.sourceIndices(root, outer)
 	}
