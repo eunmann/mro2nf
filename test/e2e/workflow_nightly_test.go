@@ -296,8 +296,8 @@ var nightlyJobRuns = map[string]string{
 
 var makeVulncheck = regexp.MustCompile(`(?m)^vulncheck: build .*\n((?:\t.*\n)+)`)
 
-// TestNightlyChecksCodeAndAdvisories pins the daily unit tests on Linux and
-// on macOS, which PR Validation only compiles for, lint, and govulncheck on
+// TestNightlyChecksCodeAndAdvisories pins the daily unit tests, lint, and
+// govulncheck on
 // the source and on every binary make build builds, mrjob included, which
 // PR Validation's Lint job runs too.
 func TestNightlyChecksCodeAndAdvisories(t *testing.T) {
@@ -307,10 +307,6 @@ func TestNightlyChecksCodeAndAdvisories(t *testing.T) {
 		if !slices.ContainsFunc(jobs.get(id).get("steps").items, func(s *yamlNode) bool { return scalarOf(s.get("run")) == run }) {
 			t.Errorf("%s job %q never runs %q", nightlyWorkflow, id, run)
 		}
-	}
-
-	if diff := cmp.Diff([]string{"ubuntu-latest", "macos-latest"}, jobs.get("unit").get("strategy").get("matrix").get("os").list()); diff != "" {
-		t.Errorf("%s unit matrix os (-want +got):\n%s", nightlyWorkflow, diff)
 	}
 
 	lint := readWorkflow(t, gateWorkflow).get("jobs").get("lint").get("steps").items

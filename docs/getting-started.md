@@ -22,15 +22,15 @@ number `7`).
 ### From a release
 
 Each [release](https://github.com/eunmann/mro2nf/releases) has one archive per
-platform, `mro2nf-<tag>-<os>-<arch>.tar.gz` for `linux` and `darwin` on `amd64`
-and `arm64`, and a `SHA256SUMS` file covering them. Verify the archive, extract
+platform, `mro2nf-<tag>-linux-<arch>.tar.gz` for `amd64` and `arm64`
+(Linux only), and a `SHA256SUMS` file covering them. Verify the archive, extract
 it and put its directory on `PATH`:
 
 ```bash
-tag=v1.2.3 platform=linux-amd64       # the release and your <os>-<arch>
+tag=v1.2.3 platform=linux-amd64       # the release and your linux-<arch>
 base=https://github.com/eunmann/mro2nf/releases/download/$tag
 curl -fL -O "$base/mro2nf-$tag-$platform.tar.gz" -O "$base/SHA256SUMS"
-grep " mro2nf-$tag-$platform.tar.gz\$" SHA256SUMS | sha256sum -c   # macOS: shasum -a 256 -c
+grep " mro2nf-$tag-$platform.tar.gz\$" SHA256SUMS | sha256sum -c
 tar -xzf "mro2nf-$tag-$platform.tar.gz"
 export PATH="$PWD/mro2nf-$tag-$platform:$PATH"
 mro2nf -version

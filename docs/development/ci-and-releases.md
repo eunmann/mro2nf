@@ -5,7 +5,7 @@
 | Workflow | Runs | Does |
 |---|---|---|
 | [`pr-validation.yml`](../../.github/workflows/pr-validation.yml) | every PR | lint (golangci-lint, `make vulncheck`: `govulncheck` on the source and on the `mro2nf`, `mre` and `mrjob` binaries, a `go mod tidy` check, `make deadcode`), build (`make cross`: every package and test compiled for each release platform), unit tests (`-race`), coverage, the e2e suites, `make lint-nf` and `make bench` |
-| [`nightly.yml`](../../.github/workflows/nightly.yml) | daily, and weekly for the heavy tier | the e2e suites on the declared Nextflow floor and the latest stable release, with a 1,000-fork `make test-scale` smoke, the unit tests (`-race`) on Linux and macOS, `make lint-check`, `make vulncheck` and a Grype scan of the runtime image; weekly, the full scale tier and a long `make gen-diff` run |
+| [`nightly.yml`](../../.github/workflows/nightly.yml) | daily, and weekly for the heavy tier | the e2e suites on the declared Nextflow floor and the latest stable release, with a 1,000-fork `make test-scale` smoke, the unit tests (`-race`), `make lint-check`, `make vulncheck` and a Grype scan of the runtime image; weekly, the full scale tier and a long `make gen-diff` run |
 | [`cdk-validation.yml`](../../.github/workflows/cdk-validation.yml) | changes to the CDK app | compiles and synthesizes the example AWS stack |
 | [`release.yml`](../../.github/workflows/release.yml) | dispatched by hand | cuts a release ([below](#releases)) |
 
@@ -64,8 +64,8 @@ is published.
    that PR's head, and that head to have a green PR Validation run. It refuses
    to run from any branch but `main`, since a dispatch runs the `release.yml`
    of the branch it names (`--ref`, by default `main`).
-2. **Builds.** It cross-compiles `mro2nf`, `mre` and `mrjob` for Linux and
-   macOS (amd64, arm64), packs one archive per platform, and builds the
+2. **Builds.** It cross-compiles `mro2nf`, `mre` and `mrjob` for Linux
+   (amd64, arm64), packs one archive per platform, and builds the
    runtime image for linux/amd64 and linux/arm64 without pushing it, with
    SBOM and provenance attestations in its index. A Grype scan of each
    platform of the image fails the release on a High or Critical finding
