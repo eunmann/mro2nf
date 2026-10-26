@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,14 +30,14 @@ type skeletonEntry struct {
 }
 
 // writeSkeleton writes the skeleton of the bundle dir into it. It walks
-// the bundle as copyTree copies a tree, following links and leaving out a
+// the bundle as CopyTree copies a tree, following links and leaving out a
 // dangling one, so a leaf dir's skeleton holds what its copy would. The
 // files at the bundle's top and each leaf's origin and shape records are
 // records, so a link a leaf's shape records reaches its expansion.
 func writeSkeleton(dir string) error {
 	var entries []skeletonEntry
 
-	if err := skeletonWalk(dir, "", true, &entries, map[dirID]struct{}{}); err != nil {
+	if err := walkTree(dir, skeletonNode{out: &entries}); err != nil {
 		return fmt.Errorf("skeleton of %s: %w", dir, err)
 	}
 
@@ -50,57 +51,24 @@ func writeSkeleton(dir string) error {
 	return writeRaw(filepath.Join(dir, SkeletonFile), raw)
 }
 
-func skeletonWalk(src, rel string, top bool, out *[]skeletonEntry, ancestors map[dirID]struct{}) error {
-	resolved, err := resolveSymlink(src)
-	if err != nil || resolved == "" {
-		return err
-	}
-
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", resolved, err)
-	}
-
-	if !info.IsDir() {
-		return skeletonFile(resolved, rel, top, out)
-	}
-
-	release, cycle := enterDir(info, ancestors)
-	if cycle {
-		return fmt.Errorf("walk %s: %w", resolved, errSymlinkCycle)
-	}
-
-	defer release()
-
-	if rel != "" {
-		*out = append(*out, skeletonEntry{Path: rel, Dir: true})
-	}
-
-	names, err := os.ReadDir(resolved)
-	if err != nil {
-		return fmt.Errorf("read dir %s: %w", resolved, err)
-	}
-
-	for _, e := range names {
-		if rel == "" && e.Name() == SkeletonFile {
-			continue
-		}
-
-		if err := skeletonWalk(filepath.Join(resolved, e.Name()), path.Join(rel, e.Name()), rel == "", out, ancestors); err != nil {
-			return err
-		}
-	}
-
-	return nil
+// skeletonNode adds the path it visits, at rel in the bundle, to out; rel
+// is "" at the bundle dir, and top is set at a path directly in it.
+type skeletonNode struct {
+	rel string
+	top bool
+	out *[]skeletonEntry
 }
 
-// skeletonFile adds the file at src, at rel in the bundle, with its content
-// when it is a record: a file at the bundle's top, or a leaf's origin or
-// shape.
-func skeletonFile(src, rel string, top bool, out *[]skeletonEntry) error {
-	e := skeletonEntry{Path: rel}
+func (s skeletonNode) admit(string) (treeNode, error) { return s, nil }
 
-	if top || ordinalRecord(rel) {
+func (s skeletonNode) dangling(string) error { return nil }
+
+// file adds the file at src with its content when it is a record: a file
+// at the bundle's top, or a leaf's origin or shape.
+func (s skeletonNode) file(src string, _ fs.FileInfo) error {
+	e := skeletonEntry{Path: s.rel}
+
+	if s.top || ordinalRecord(s.rel) {
 		raw, err := os.ReadFile(src)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", src, err)
@@ -110,10 +78,28 @@ func skeletonFile(src, rel string, top bool, out *[]skeletonEntry) error {
 		e.Record = &content
 	}
 
-	*out = append(*out, e)
+	*s.out = append(*s.out, e)
 
 	return nil
 }
+
+func (s skeletonNode) dir() error {
+	if s.rel != "" {
+		*s.out = append(*s.out, skeletonEntry{Path: s.rel, Dir: true})
+	}
+
+	return nil
+}
+
+func (s skeletonNode) child(name string) (treeNode, bool) {
+	if s.rel == "" && name == SkeletonFile {
+		return nil, false
+	}
+
+	return skeletonNode{rel: path.Join(s.rel, name), top: s.rel == "", out: s.out}, true
+}
+
+func (s skeletonNode) leave(fs.FileInfo, bool) error { return nil }
 
 // ordinalRecord reports whether the bundle path rel is a record in a leaf's
 // ordinal dir, beside the leaf.
@@ -128,57 +114,40 @@ func ordinalRecord(rel string) bool {
 // that reaches nothing as itself, as a reader of the leaf restores it. It
 // reads no file's bytes.
 func CopyShape(src, dst string) error {
-	return copyShape(src, dst, map[dirID]struct{}{})
+	return walkTree(src, shapeNode{dst: dst})
 }
 
-func copyShape(src, dst string, ancestors map[dirID]struct{}) error {
-	resolved, err := resolveSymlink(src)
+// shapeNode places the shape of the path it visits at dst.
+type shapeNode struct {
+	dst string
+}
+
+func (s shapeNode) admit(string) (treeNode, error) { return s, nil }
+
+func (s shapeNode) dangling(src string) error {
+	target, err := os.Readlink(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("read link %s: %w", src, err)
 	}
 
-	if resolved == "" {
-		target, err := os.Readlink(src)
-		if err != nil {
-			return fmt.Errorf("read link %s: %w", src, err)
-		}
+	return linkAt(target, s.dst)
+}
 
-		return linkAt(target, dst)
-	}
+func (s shapeNode) file(string, fs.FileInfo) error { return writeRaw(s.dst, nil) }
 
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", resolved, err)
-	}
-
-	if !info.IsDir() {
-		return writeRaw(dst, nil)
-	}
-
-	release, cycle := enterDir(info, ancestors)
-	if cycle {
-		return fmt.Errorf("shape of %s: %w", resolved, errSymlinkCycle)
-	}
-
-	defer release()
-
-	if err := os.MkdirAll(dst, dirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
-	}
-
-	entries, err := os.ReadDir(resolved)
-	if err != nil {
-		return fmt.Errorf("read dir %s: %w", resolved, err)
-	}
-
-	for _, e := range entries {
-		if err := copyShape(filepath.Join(resolved, e.Name()), filepath.Join(dst, e.Name()), ancestors); err != nil {
-			return err
-		}
+func (s shapeNode) dir() error {
+	if err := os.MkdirAll(s.dst, dirPerm); err != nil {
+		return fmt.Errorf("create %s: %w", s.dst, err)
 	}
 
 	return nil
 }
+
+func (s shapeNode) child(name string) (treeNode, bool) {
+	return shapeNode{dst: filepath.Join(s.dst, name)}, true
+}
+
+func (s shapeNode) leave(fs.FileInfo, bool) error { return nil }
 
 // ExpandSkeleton writes, at dir, the bundle the skeleton file describes:
 // its dirs, its records as they were written, and an empty file at each

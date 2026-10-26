@@ -29,24 +29,34 @@ func TestCloseChecked(t *testing.T) {
 	}
 }
 
-// TestCopyTreeSymlinkCycle guards against unbounded recursion: a directory output
-// containing a symlink back to one of its ancestors would otherwise recurse until
-// ENAMETOOLONG. CopyTree must stop with errSymlinkCycle instead. In-package so it
-// can assert the sentinel via errors.Is rather than string-matching the message.
-func TestCopyTreeSymlinkCycle(t *testing.T) {
-	dir := t.TempDir()
-
-	root := filepath.Join(dir, "out")
-	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// out/sub/loop -> out : recursing into loop re-enters out, an ancestor.
-	if err := os.Symlink(root, filepath.Join(root, "sub", "loop")); err != nil {
-		t.Fatal(err)
+// TestTreeWalksStopAtSymlinkCycle guards against unbounded recursion: a
+// directory output containing a symlink back to one of its ancestors would
+// otherwise recurse until ENAMETOOLONG. Every walk of a tree must stop with
+// errSymlinkCycle instead. In-package so it can assert the sentinel via
+// errors.Is rather than string-matching the message.
+func TestTreeWalksStopAtSymlinkCycle(t *testing.T) {
+	walks := map[string]func(src, dst string) error{
+		"copy":     CopyTree,
+		"shape":    CopyShape,
+		"skeleton": func(src, _ string) error { return writeSkeleton(src) },
 	}
 
-	err := CopyTree(root, filepath.Join(dir, "copy"))
-	if !errors.Is(err, errSymlinkCycle) {
-		t.Fatalf("CopyTree over a symlink cycle: err = %v, want errSymlinkCycle", err)
+	for name, walk := range walks {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			root := filepath.Join(dir, "out")
+			if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// out/sub/loop -> out : recursing into loop re-enters out, an ancestor.
+			if err := os.Symlink(root, filepath.Join(root, "sub", "loop")); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := walk(root, filepath.Join(dir, "copy")); !errors.Is(err, errSymlinkCycle) {
+				t.Fatalf("%s over a symlink cycle: err = %v, want errSymlinkCycle", name, err)
+			}
+		})
 	}
 }
