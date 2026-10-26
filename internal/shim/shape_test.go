@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -27,7 +28,7 @@ func TestReaderRestoresDanglingLinks(t *testing.T) {
 	symlinkAt(t, "/nonexistent", filepath.Join(tree, "dangling"))
 
 	bundle := filepath.Join(dir, "bundle")
-	writeBundle(t, bundle, map[string]any{"d": tree}, fields(t, "d path"), shim.Opts{})
+	writeBundle(t, bundle, map[string]any{"d": tree}, typestest.Fields(t, "d path"), shim.Opts{})
 
 	if links := linksBelow(t, bundle); len(links) != 0 {
 		t.Errorf("the bundle holds links %v, which its upload would refuse", links)
@@ -67,7 +68,7 @@ func TestReaderRestoresEmptyDirs(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "bundle")
-	writeBundle(t, bundle, map[string]any{"d": tree, "e": empty}, fields(t, "d path", "e path"), shim.Opts{})
+	writeBundle(t, bundle, map[string]any{"d": tree, "e": empty}, typestest.Fields(t, "d path", "e path"), shim.Opts{})
 
 	staged := objectStoreCopy(t, bundle, filepath.Join(dir, "copy"))
 	if err := mustStaged(t, staged).Restore(); err != nil {
@@ -97,7 +98,7 @@ func TestRestoreRefusesADifferentEntry(t *testing.T) {
 	symlinkAt(t, "/nonexistent", filepath.Join(tree, "dangling"))
 
 	bundle := filepath.Join(dir, "bundle")
-	writeBundle(t, bundle, map[string]any{"d": tree}, fields(t, "d path"), shim.Opts{})
+	writeBundle(t, bundle, map[string]any{"d": tree}, typestest.Fields(t, "d path"), shim.Opts{})
 	writeFileAt(t, filepath.Join(bundle, "f", "L0000", "d", "dangling"), "not a link")
 
 	if err := mustStaged(t, bundle).Restore(); err == nil {
@@ -111,7 +112,7 @@ func TestShapeIsAReservedLeafName(t *testing.T) {
 	dir := t.TempDir()
 	src := writeFileAt(t, filepath.Join(dir, ".mre-shape"), "x")
 
-	_, err := shim.WriteItem(filepath.Join(dir, "bundle"), map[string]any{"f": src}, fields(t, "f file"), fileTable(t), shim.Opts{}, shim.Staged{})
+	_, err := shim.WriteItem(filepath.Join(dir, "bundle"), map[string]any{"f": src}, typestest.Fields(t, "f file"), fileTable(t), shim.Opts{}, shim.Staged{})
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Errorf("WriteItem of a leaf named .mre-shape = %v, want a reserved-name error", err)
 	}
