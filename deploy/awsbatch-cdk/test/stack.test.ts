@@ -95,6 +95,42 @@ test('the log permissions name only the HealthOmics workflow log group', () => {
   assert.match(JSON.stringify(logs[0].Resource), /:log-group:\/aws\/omics\/WorkflowLog:\*"/);
 });
 
+const jobRoles = () => template.findResources('AWS::IAM::Role', {
+  Properties: {
+    AssumeRolePolicyDocument: {
+      Statement: [Match.objectLike({ Principal: { Service: 'ecs-tasks.amazonaws.com' } })],
+    },
+  },
+});
+
+test('Batch jobs run as a role only this account\'s ECS tasks assume', () => {
+  const roles = Object.values(jobRoles());
+  assert.equal(roles.length, 1);
+  const [trust] = roles[0].Properties.AssumeRolePolicyDocument.Statement;
+  assert.deepEqual(trust.Condition.StringEquals, thisAccount);
+  assert.match(JSON.stringify(trust.Condition.ArnLike['aws:SourceArn']), /":ecs:"/);
+  template.hasOutput('BatchJobRoleArn', { Value: { 'Fn::GetAtt': [Object.keys(jobRoles())[0], 'Arn'] } });
+});
+
+test('the job role writes only the expiring work dir and deletes nothing', () => {
+  const [role] = Object.keys(jobRoles());
+  const own = Object.values(template.findResources('AWS::IAM::Policy'))
+    .filter((p) => JSON.stringify(p.Properties.Roles) === JSON.stringify([{ Ref: role }]))
+    .flatMap((p) => p.Properties.PolicyDocument.Statement as Statement[]);
+  const actions = own.flatMap(actionsOf);
+  assert.ok(actions.includes('s3:PutObject'), `the job role cannot write: ${actions}`);
+  assert.deepEqual(actions.filter((a) => a.startsWith('s3:Delete')), []);
+
+  const [bucket] = Object.values(template.findResources('AWS::S3::Bucket'));
+  const expiring = bucket.Properties.LifecycleConfiguration.Rules
+    .filter((r: { ExpirationInDays?: number }) => r.ExpirationInDays !== undefined)
+    .map((r: { Prefix: string }) => r.Prefix);
+  assert.deepEqual(expiring, ['work/']);
+  for (const s of own.filter((s) => actionsOf(s).includes('s3:PutObject'))) {
+    assert.match(JSON.stringify(s.Resource), /^\{"Fn::Join":\["",\[\{"Fn::GetAtt":\["WorkBucket[0-9A-F]+","Arn"\]\},"\/work\/\*"\]\]\}$/);
+  }
+});
+
 test('the queue cancels a job no instance can fit', () => {
   const queues = Object.values(template.findResources('AWS::Batch::JobQueue'));
   assert.equal(queues.length, 1);

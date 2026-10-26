@@ -51,12 +51,14 @@ AWS's own hosts, not under your account.
 
 Push the pipeline's image to ECR, built for the compute environment's
 architecture (`docker build --platform linux/amd64` for x86 instances). Name
-the queue and region in a config:
+the queue and region in a config, and the IAM role the tasks' containers get,
+which is otherwise the instance's:
 
 ```groovy
 // batch.config
 process.queue = '<job queue>'
 aws.region = '<region>'
+aws.batch.jobRole = '<job role ARN>'
 ```
 
 ```bash

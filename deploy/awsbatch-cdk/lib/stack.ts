@@ -17,8 +17,9 @@ export interface Mro2nfStackProps extends cdk.StackProps {
   /**
    * Input buckets every Batch instance mounts besides the work bucket, which
    * it always mounts: a run reads an s3:// entry input of a mounted bucket in
-   * place. The instance role may read only these and the work bucket, so a
-   * run staging an input of any other bucket fails to download it.
+   * place. The instance and job roles may read only these and the work
+   * bucket, so a run staging an input of any other bucket fails to download
+   * it.
    */
   readonly mountBuckets?: string[];
   /** The local read cache each mounted bucket may fill on an instance, in MiB. */
@@ -143,7 +144,8 @@ export class Mro2nfStack extends cdk.Stack {
     // --- AWS Batch (-profile awsbatch) ---
 
     // The EC2 instances Batch launches need to pull the image (ECR) and stage
-    // files to/from S3 (the aws CLI baked into the image uses this role).
+    // files to/from S3 (the aws CLI baked into the image uses this role when
+    // the run names no job role).
     const instanceRole = new iam.Role(this, 'BatchInstanceRole', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
       managedPolicies: [
@@ -152,8 +154,26 @@ export class Mro2nfStack extends cdk.Stack {
       ],
     });
     bucket.grantReadWrite(instanceRole);
+
+    // The role a task's container runs as when the run names it
+    // (aws.batch.jobRole). Nextflow's task wrapper reads the work dir and
+    // uploads the task's files below it with `aws s3 cp`, and the head node
+    // publishes -output-dir, so a task needs no other write and no delete.
+    const jobRole = new iam.Role(this, 'BatchJobRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': this.account },
+          ArnLike: { 'aws:SourceArn': `arn:${this.partition}:ecs:${this.region}:${this.account}:*` },
+        },
+      }),
+    });
+    bucket.grantRead(jobRole);
+    bucket.grantPut(jobRole, 'work/*');
+
     for (const b of inputBuckets) {
-      s3.Bucket.fromBucketName(this, `MountBucket-${b}`, b).grantRead(instanceRole);
+      const input = s3.Bucket.fromBucketName(this, `MountBucket-${b}`, b);
+      input.grantRead(instanceRole);
+      input.grantRead(jobRole);
     }
 
     // Mountpoint for S3 mounts the work bucket and the input buckets on every
@@ -264,6 +284,7 @@ export class Mro2nfStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'WorkBucketName', { value: bucket.bucketName });
     new cdk.CfnOutput(this, 'EcrRepoUri', { value: repo.repositoryUri });
     new cdk.CfnOutput(this, 'BatchJobQueue', { value: queue.jobQueueName });
+    new cdk.CfnOutput(this, 'BatchJobRoleArn', { value: jobRole.roleArn });
     new cdk.CfnOutput(this, 'OmicsRoleArn', { value: omicsRole.roleArn });
   }
 }
