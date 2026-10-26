@@ -308,10 +308,6 @@ func (err *forkResolutionError) Unwrap() error {
 	return err.Err
 }
 
-var missingValueError = ErrNoElement
-
-// Path looks up map keys, separated by '.' characters, and projecting through
-
 type marshallerArray []json.Marshaler
 
 func (arr marshallerArray) MarshalJSON() ([]byte, error) {

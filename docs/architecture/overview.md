@@ -156,8 +156,8 @@ settings (`TestJobSettingsMatchModule`), and core's runtime resolution,
 resolution at the pinned commit, run over what one task staged in place of a
 pipestance on disk. A fork's outputs come from a store of the task's staged
 records, and an output read the task did not stage fails loudly rather than
-reading as not yet ready. Every function it changes from core is listed, with
-why, in `mrcoreAdapted`
+reading as not yet ready. Every function, type, var and const it changes from
+core is listed, with why, in `mrcoreAdapted`
 ([`test/thirdparty/mrcore_test.go`](../../test/thirdparty/mrcore_test.go)),
 and `TestMrcoreMatchesCore` holds everything else to core's own source.
 

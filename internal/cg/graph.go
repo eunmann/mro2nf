@@ -459,6 +459,7 @@ func (g *Graph) outerRoots(root *syntax.CallGraphStage) syntax.ForkRootList {
 // unexported findSplitCalls finds a stage's fork roots in its inputs
 // (syntax/resolve_stage.go:789): every split's call, and each call a ref is
 // forked on at an index not yet fixed, less the calls a merge gathers.
+// TestSplitCallsAreMartians holds it to the fork roots Martian compiles.
 func splitCalls(e syntax.Exp, out map[*syntax.CallStm]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:

@@ -15,7 +15,9 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-var nullBytes = []byte("null")
+var nullBytes = []byte(syntax.KindNull)
+
+var missingValueError = ErrNoElement
 
 // TopNode is core's TopNode (pipestance.go:951) over the call graph of one
 // invocation, its outs read from a Store.
