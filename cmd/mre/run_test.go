@@ -22,6 +22,37 @@ func untypedWriter() itemWriter {
 	return itemWriter{tbl: types.NewTable(syntax.NewTypeLookup())}
 }
 
+// TestOutsMustBeAnObject: a job's _outs that is an array or a number fails
+// a stage with outputs, its post and its chunk's outs bundle, as mrp fails
+// a stage whose _outs does not decode as an object (core/stage.go:1282
+// doComplete, :1214 doJoin, metadata.go:640 read); null and the adapter's
+// "" carry no outs, and a stage with no outputs has none whatever its job
+// wrote, as mrp writes it {} (core/stage.go:1292).
+func TestOutsMustBeAnObject(t *testing.T) {
+	outs := &syntax.OutParams{List: []*syntax.OutParam{{Id: "n", Tname: syntax.TypeId{Tname: syntax.KindInt}}}}
+	params := []*syntax.StructMember{&outs.List[0].StructMember}
+
+	for _, raw := range []string{`[1]`, `5`} {
+		if _, err := finishedOf(json.RawMessage(raw), outs, shim.Opts{}); !errors.Is(err, errNotObject) {
+			t.Errorf("finishedOf(%s): %v, want %v", raw, err, errNotObject)
+		}
+
+		if _, err := writeOutsBundle(t.TempDir(), json.RawMessage(raw), params, untypedWriter()); !errors.Is(err, errNotObject) {
+			t.Errorf("writeOutsBundle(%s): %v, want %v", raw, err, errNotObject)
+		}
+
+		if f, err := finishedOf(json.RawMessage(raw), new(syntax.OutParams), shim.Opts{}); err != nil || len(f.outs) != 0 {
+			t.Errorf("finishedOf(%s) of a stage with no outputs = %v, %v; want no outs", raw, f.outs, err)
+		}
+	}
+
+	for _, raw := range []string{`null`, `""`} {
+		if f, err := finishedOf(json.RawMessage(raw), outs, shim.Opts{}); err != nil || len(f.outs) != 0 {
+			t.Errorf("finishedOf(%s) = %v, %v; want no outs", raw, f.outs, err)
+		}
+	}
+}
+
 // TestChunksDirRoundTrip: the chunks dir a split's job writes reads back as
 // the split's stage defs, in chunk order under mrp's chunk names, each
 // def's args and resources and the join's resources intact.
