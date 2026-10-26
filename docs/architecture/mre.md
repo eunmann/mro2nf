@@ -118,8 +118,16 @@ The job step runs the task's phase of the instance as `mrp` runs its job
   `_outs`, `_chunk_defs` and `_chunk_outs` for a join, and the files, tmp and
   journal directories. `_jobinfo` carries `mrp`'s name,
   `ID.<psid>.<fqid>.<fork id>[.chnkN]`, the top-level call's invocation, the
-  Martian runtime's and the pipelines' versions, and `monitor_flag` under
+  Martian runtime's version and the pipelines' version PLAN found
+  (`-pipelines-version`), and `monitor_flag` under
   `-monitor`, which `mrjob` enforces.
+- **Its environment.** The job runs in `mre`'s environment with each of
+  `mrp`'s thread variables set to its threads, `TMPDIR` its tmp directory and
+  `MRO_UUID` the run's pipestance uuid (`-uuid`), which
+  `martian.get_pipestance_uuid()` returns: the launch environment's
+  `MRO_FORCE_UUID`, as `mrp` honours it, or else the run's Nextflow session
+  id, which a `-resume` keeps, as `mrp`'s restart keeps the pipestance's
+  uuid.
 - **The outcome.** `mrjob` exits 0 however the stage ends, so `mre` reads the
   outcome from the metadata:
 

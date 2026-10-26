@@ -114,10 +114,12 @@ transpiled from ([Container images](../../docs/user-guide/container-images.md)).
 # 1. transpile (the same project serves Batch and HealthOmics)
 ./mro2nf -o out testdata/split_test/pipeline.mro
 
-# 2. build + push the runtime image, then the pipeline's image FROM it with
-#    the fixture at the path step 1 transpiled it from (linux/amd64 compute)
+# 2. build + push the runtime image, its mre stamped with the build of the
+#    mro2nf that transpiled step 1's project, which PLAN requires, then the
+#    pipeline's image FROM it with the fixture at the path step 1 transpiled
+#    it from (linux/amd64 compute)
 aws ecr get-login-password --region <Region> | docker login --username AWS --password-stdin <EcrRepoUri>
-docker build --platform linux/amd64 -t <EcrRepoUri>:runtime -f deploy/runtime/Dockerfile .
+docker build --platform linux/amd64 --build-arg VERSION="$(./mro2nf -version | cut -d' ' -f2)" -t <EcrRepoUri>:runtime -f deploy/runtime/Dockerfile .
 docker push <EcrRepoUri>:runtime
 cat > split_test.Dockerfile <<EOF
 FROM <EcrRepoUri>:runtime

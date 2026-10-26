@@ -178,8 +178,9 @@ A shape whose data the tasks cannot exchange is refused at transpile time:
 ## The generated project
 
 ```
-main.nf               the params block, PLAN, the nodes or the calls of their
-                      workflows, then OUTS and the workflow outputs
+main.nf               the params block, each entry input's default function,
+                      PLAN, the nodes or the calls of their workflows,
+                      then OUTS and the workflow outputs
 subworkflows/         a workflow per run of nodes (W<j>.nf), only in a project
                       too large for one
 stage.nf              the one hand-written stage module every node includes
@@ -309,7 +310,6 @@ the shared ones ([Targets](targets.md)). `conf/base.config` holds:
 - **`mro2nf_overrides`**, the run's `mrp --overrides` file, and
   **`mro2nf_local_jobs`**, which the `standard` and `docker` profiles set to
   grant each job as `mrp`'s local job manager does ([Targets](targets.md#resources)).
-- **One `params.<name> = null` per entry input** ([Inputs](inputs.md)).
 - **The retry policy**, `mrp`'s: a task is retried, up to twice, only on exit
   75 or on an executor kill or timeout (104, 130–145), at the memory and cpus
   of its first attempt.
@@ -319,6 +319,8 @@ the shared ones ([Targets](targets.md)). `conf/base.config` holds:
 
 A boolean option is a `Boolean` of `main.nf`'s params block, which Nextflow
 converts a launch's `--<name> true|false` to and refuses any other value as,
-so a script reads it as the boolean it is.
+so a script reads it as the boolean it is. The entry inputs are not in
+`conf/base.config`: the params block gives each the call's value as its
+default ([Inputs](inputs.md)).
 
 Next: [Run time](runtime.md).

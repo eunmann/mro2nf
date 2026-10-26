@@ -1,0 +1,7 @@
+@include "echo.mro"
+
+call LE(
+    neg = -7,
+    big = 9007199254740993,
+    esc = "mro2nf:transpiled",
+)

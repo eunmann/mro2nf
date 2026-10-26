@@ -1,9 +1,6 @@
 package cgnf
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // planProcess declares PLAN, the run's one start task, which compiles the
 // project's copy of the entry's .mro files. The driver reads its records
@@ -11,8 +8,11 @@ import (
 // path of PLAN's file: the run's call, which every task compiles over the
 // entry's declarations where the run finds its code, each node's digest and
 // its resources under the run's mrp --overrides file, the entry files each
-// instance stages, and the forks of every entry-fed root, one record, so
-// PLAN's outputs do not grow with the roots. A multi-line record is a file
+// instance stages, the forks of every entry-fed root, one record, so
+// PLAN's outputs do not grow with the roots, and the pipelines' version,
+// found once, as mrp finds it, on the include path the stage tasks find the
+// code on, where its own copy of the .mro files has no version. A
+// multi-line record is a file
 // the driver reads, not an eval output, which Nextflow joins line by line
 // in time quadratic in its lines. Under an S3 mount, which s3:// inputs
 // PLAN reads in place depends on the buckets its instance mounts, which no
@@ -25,6 +25,9 @@ import (
 // modification time, which each run's new task dirs change, so PLAN would
 // never resume. The launch params it reads are its meta's (planRun), as no
 // 26.04 release keys a param read by a function its script calls (gen.go).
+// It fails the run unless the mre it runs is the mro2nf build that
+// transpiled the project (meta.build), whose flags and records every task
+// relies on.
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
@@ -41,32 +44,40 @@ const planProcess = `process PLAN {
     path('leaves'), emit: leaves
     path('files'), emit: files
     path('roots'), emit: roots
+    eval('cat pipelines'), emit: pipelines
 
     script:
     """
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(meta.run.mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files
+    ${shq(meta.run.mre)} plan -build ${shq(meta.build)} ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files -code-mropath ${shq(meta.mropath)} -pipelines pipelines
     """
 }
 
 `
 
 // values is the workflow expression of the run's entry values as JSON:
-// each entry input's param, null when unset, which keeps the transpiled
-// value.
+// each entry input's param that is not its default (changed), which an
+// unset input is. mre plan keeps an input the values leave out as the .mro
+// writes it, where a value round-tripped through Groovy and JSON would lose
+// its lexeme, such as a float's -0.
 func (p *project) values() string {
-	entries := make([]string, len(p.inputs))
+	values := make([]string, len(p.inputs))
+	defaults := []string{}
+
 	for i, lp := range p.inputs {
-		entries[i] = gstr(lp.id) + ": params." + lp.id
+		values[i] = gstr(lp.id) + ": params." + lp.id
+		if lp.defaultFunc != "" {
+			defaults = append(defaults, gstr(lp.id)+": "+lp.defaultFunc+"()")
+		}
 	}
 
-	if len(entries) == 0 {
+	if len(values) == 0 {
 		return "'{}'"
 	}
 
-	return "groovy.json.JsonOutput.toJson([" + strings.Join(entries, ", ") + "])"
+	return "groovy.json.JsonOutput.toJson(changed(" + gmap(values) + ", " + gmap(defaults) + "))"
 }
 
 // publications maps each node the pipeline outs read to the source of the

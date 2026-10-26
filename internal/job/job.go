@@ -62,6 +62,9 @@ type Runtime struct {
 	Local Pool
 	// PSID is the run's pipestance id, which names every job.
 	PSID string
+	// UUID is the run's pipestance uuid, which every job's environment
+	// holds as MRO_UUID (core/pipestance.go:879 SetUuid).
+	UUID string
 	// Invocation and Version are recorded in every job's _jobinfo.
 	Invocation *core.InvocationData
 	Version    core.VersionInfo
@@ -71,12 +74,17 @@ type Runtime struct {
 
 // Versions is the version record mrp writes to every _jobinfo
 // (core/pipestance.go:995 NewTopNode): the Martian runtime's embedded
-// version and the pipelines' version found on mroPaths
-// (cmd/mrp/configure.go:252 GetMroVersion).
-func Versions(mroPaths []string) core.VersionInfo {
-	pipelines, _ := util.GetMroVersion(mroPaths)
-
+// version and the pipelines' version the run found (PipelinesVersion).
+func Versions(pipelines string) core.VersionInfo {
 	return core.VersionInfo{Martian: util.GetVersion(), Pipelines: pipelines}
+}
+
+// PipelinesVersion is the pipelines' version found on mroPaths, as mrp
+// finds it once, at its start (cmd/mrp/configure.go:252 GetMroVersion).
+func PipelinesVersion(mroPaths []string) string {
+	v, _ := util.GetMroVersion(mroPaths)
+
+	return v
 }
 
 // Stage is a stage node as mrp's node runs it. Callable is the stage's

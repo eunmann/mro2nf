@@ -1,6 +1,8 @@
 # Literal edge cases: negative numbers, a >2^53 int (precision), unicode
 # escape. TestMrpDiffInt64Override launches it with int64's min and max,
-# against mrp running override_int64.mro, whose literals are those values.
+# against mrp running override_int64.mro, whose literals are those values,
+# and TestMrpDiffStringOverride sets esc to the text mro2nf:transpiled
+# against mrp running override_string.mro.
 @include "echo.mro"
 
 call LE(

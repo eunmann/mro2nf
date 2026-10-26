@@ -181,6 +181,73 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 	}
 }
 
+// TestEmitPassesThePipestanceUUID (#625): every stage task hands its jobs
+// the run's pipestance uuid, which mrp sets as MRO_UUID for each job: the
+// launch environment's MRO_FORCE_UUID, as mrp honours it, or else the
+// run's Nextflow session id, which a -resume keeps, as mrp's restart keeps
+// the pipestance's uuid, and which already keys every task.
+func TestEmitPassesThePipestanceUUID(t *testing.T) {
+	if want := "uuid: env('MRO_FORCE_UUID') ?: workflow.sessionId.toString()"; !strings.Contains(stageRun, want) {
+		t.Errorf("stageRun lacks %q: %s", want, stageRun)
+	}
+
+	if want := " -uuid ${shq(run.uuid)}"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
+// TestEmitPlanChecksTheBuild (#626): PLAN hands mre plan the mro2nf build
+// that transpiled the project, which its meta records, so a run whose mre
+// is another build fails before any stage runs.
+func TestEmitPlanChecksTheBuild(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{"${shq(meta.run.mre)} plan -build ${shq(meta.build)} ", "build: 'v1.2.3'"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+}
+
+// TestEmitPassesTheRunWorkDir (#625): the pipeline's code is a read-only
+// root every task reads at one path, and an include path may hold the run's
+// work dir, so every stage task names it, and mre keeps the tasks' files
+// out of the roots.
+func TestEmitPassesTheRunWorkDir(t *testing.T) {
+	if want := "workdir: workflow.workDir.toUriString()]"; !strings.Contains(stageRun, want) {
+		t.Errorf("stageRun lacks %q: %s", want, stageRun)
+	}
+
+	if want := " -run-workdir ${shq(run.workdir)} "; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
+// TestEmitPassesThePipelinesVersion (#625): PLAN finds the pipelines'
+// version once, on the include path the stage tasks find the code on, and
+// every stage task records it in its jobs' _jobinfo, so a commit during a
+// run or across a -resume gives no two tasks different versions.
+func TestEmitPassesThePipelinesVersion(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{
+		" -code-mropath ${shq(meta.mropath)} ",
+		" -pipelines pipelines",
+		"eval('cat pipelines'), emit: pipelines",
+		".combine(PLAN.out.pipelines).map { c, v -> [entry: ",
+		", call: c, pipelines: v, run: [",
+		"] }.first()\n",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if want := " -pipelines-version ${shq(meta.pipelines)}"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
 // TestProcessesReadNoPathGlobal: on Nextflow's v2 parser, the 26.04 floor's
 // default, a task's -resume key holds no global its process reads, so a
 // changed value, such as another run's work dir, would silently reuse a
@@ -212,7 +279,7 @@ var (
 	// character and no quote, which opens a message naming a param.
 	paramRead = regexp.MustCompile(`(^|[^'\w])params\.`)
 	runRead   = regexp.MustCompile(`\brun\.(\w+)`)
-	runKey    = regexp.MustCompile(`(\w+): params\.`)
+	runKey    = regexp.MustCompile(`(\w+): `)
 )
 
 // TestScriptsReadParamsFromMeta (#576): a task's -resume key holds its

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/buildinfo"
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/google/go-cmp/cmp"
@@ -29,12 +30,12 @@ func fixtureDir(t *testing.T, fixture string) string {
 	return fx
 }
 
-// plan runs mre plan on fixture with the entry values values, and returns
-// the plan dir.
-func plan(t *testing.T, fixture, values string) (string, error) {
+// plan runs mre plan on fixture with the entry values and flags,
+// and returns the plan dir.
+func plan(t *testing.T, fixture, values string, flags ...string) (string, error) {
 	t.Helper()
 
-	return planEntry(t, fixtureDir(t, fixture), values)
+	return planEntry(t, fixtureDir(t, fixture), values, flags...)
 }
 
 // planEntry runs mre plan on the pipeline.mro in dir with the entry values
@@ -50,12 +51,74 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 	}
 
 	err := run(t.Context(), append([]string{
-		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
+		"plan", "-build", testBuild(), "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-pipelines", filepath.Join(work, "pipelines"),
 	}, flags...))
 
 	return work, err
+}
+
+// testBuild is this mre's build, which a project its tests plan names as
+// the one that transpiled it.
+func testBuild() string { return buildinfo.Version(version) }
+
+// TestPlanChecksTheBuild (#626): PLAN runs a project the mro2nf build of
+// its mre transpiled, and fails one another build transpiled, naming both,
+// before it reads anything else: a project and mre of different builds
+// failed only at the first task whose flags differed, or ran with
+// mismatched behaviour.
+func TestPlanChecksTheBuild(t *testing.T) {
+	if _, err := plan(t, "diamond_min", `{}`); err != nil {
+		t.Fatalf("plan of a project this build transpiled: %v", err)
+	}
+
+	for _, build := range []string{"v0.6.0", ""} {
+		_, err := planEntry(t, fixtureDir(t, "diamond_min"), `{}`, "-build", build)
+		if !errors.Is(err, errBuild) || !strings.Contains(err.Error(), "project transpiled by "+build+", mre is "+testBuild()) {
+			t.Errorf("plan of a project build %q transpiled: %v, want errBuild naming both builds", build, err)
+		}
+	}
+}
+
+// TestPlanSetsNullValues (#625): a null entry value sets the input to null,
+// as the null literal in mrp's invocation does, and an input the values
+// leave out keeps the transpiled value.
+func TestPlanSetsNullValues(t *testing.T) {
+	work, err := plan(t, "cli_typed", `{"n": null, "b": null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := planCall(t, work)
+	for _, want := range []string{"n = null,", "b = null,", "f = 0.5,", "g = 0.25,"} {
+		if !strings.Contains(call, want) {
+			t.Errorf("the call lacks %q:\n%s", want, call)
+		}
+	}
+}
+
+// TestPlanFindsThePipelinesVersion (#625): PLAN finds the pipelines'
+// version once for the run, as mrp does at its start (cmd/mrp/configure.go
+// GetMroVersion), on the include path the stage tasks find the code on, not
+// on its own copy of the .mro files, and writes it for every task's
+// _jobinfo.
+func TestPlanFindsThePipelinesVersion(t *testing.T) {
+	code := filepath.Join(t.TempDir(), "mro")
+	if err := os.MkdirAll(code, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, filepath.Join(filepath.Dir(code), ".version"), "v9.9.9\n")
+
+	work, err := plan(t, "diamond_min", `{}`, "-code-mropath", code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readText(t, filepath.Join(work, "pipelines")); got != "v9.9.9" {
+		t.Errorf("PLAN wrote the pipelines' version %q, want v9.9.9, the code's", got)
+	}
 }
 
 // planCall is the run's call the plan in work wrote, decoded.
@@ -471,7 +534,7 @@ func TestPlanForksByTheSplitValue(t *testing.T) {
 	}
 
 	for _, values := range []string{
-		`{"x":[4,5]}`, `{"x":5}`, `{"x":"5"}`, `{"x":{}}`, `{"x":{"split":5}}`, `{"x":{"split":null}}`, `{"x":{"split":"[4,5]"}}`,
+		`{"x":[4,5]}`, `{"x":5}`, `{"x":"5"}`, `{"x":{}}`, `{"x":null}`, `{"x":{"split":5}}`, `{"x":{"split":null}}`, `{"x":{"split":"[4,5]"}}`,
 	} {
 		_, err := planEntry(t, dir, values)
 		if !errors.Is(err, errSplitShape) || !strings.Contains(err.Error(), `entry input "x"`) {
@@ -702,7 +765,7 @@ func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	if err := run(t.Context(), []string{
-		"plan", "-entry", entry, "-mropath", shared, "-work", work, "-psid", "mrp",
+		"plan", "-build", testBuild(), "-entry", entry, "-mropath", shared, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
 	}); err != nil {
 		t.Fatal(err)
@@ -737,9 +800,9 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 	vf := writeTestFile(t, filepath.Join(work, "values.json"), `{"reads": "`+value+`"}`)
 
 	err := run(t.Context(), append([]string{
-		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
+		"plan", "-build", testBuild(), "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-pipelines", filepath.Join(work, "pipelines"),
 	}, flags...))
 
 	return work, err
@@ -810,9 +873,10 @@ func TestArgsReadsStagedEntryFiles(t *testing.T) {
 	}
 
 	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
+	writeTestFile(t, "leaves", "0\n")
 
 	gf := graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: filepath.Join(work, "call"), mropath: fx}
-	if _, _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "0"}, "args"); err != nil {
+	if _, _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "leaves"}, "args"); err != nil {
 		t.Fatal(err)
 	}
 

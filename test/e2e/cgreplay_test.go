@@ -30,7 +30,8 @@ import (
 // the topology (cg.Topology): node by node in its order, every stage
 // instance, enumerated root by root from its roots' fork elements and keyed
 // by their ordinals as FORK keys it, runs its tasks through `mre stage` as
-// a local run's tasks do, reading host entry inputs in place, from only
+// a local run's tasks do, with the pipelines' version `mre plan` found as
+// PLAN finds it, reading host entry inputs in place, from only
 // what the instance stages: its fork elements, the partner elements it zips
 // (ZIP), and of each node it reads, the outputs the read names of the
 // instances the read's patterns give it (READ, GATHER, NEEDS). Each task
@@ -94,6 +95,9 @@ type cgReplay struct {
 	// overrides is the mrp --overrides file mrp ran with, which every job
 	// runs with too.
 	overrides string
+	// pipelines is the pipelines' version `mre plan` found, which every
+	// job's _jobinfo records.
+	pipelines string
 	posted    map[string][]postedInstance
 	ours      map[string]replayedFork
 	// refs maps each dir a post wrote to the ordinal dirs of the files it
@@ -221,6 +225,7 @@ func (rp *cgReplay) run() {
 		rp.t.Fatal(err)
 	}
 
+	rp.pipelines = rp.plan()
 	ran, off := 0, 0
 
 	for _, n := range rp.topo.Nodes {
@@ -891,6 +896,7 @@ func (rp *cgReplay) stage(phase, jw string, argv ...string) bool {
 	base := []string{
 		"stage", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters, "-mrjob", filepath.Join(root, "mrjob"), "-work", jw,
 		"-local-cores", strconv.Itoa(mrpLocalCores), "-local-mem-gb", strconv.Itoa(mrpLocalMemGB), "-host-in-place",
+		"-pipelines-version", rp.pipelines,
 	}
 	if rp.overrides != "" {
 		base = append(base, "-overrides", rp.overrides)
@@ -910,6 +916,53 @@ func (rp *cgReplay) stage(phase, jw string, argv ...string) bool {
 
 		return false
 	}
+}
+
+// plan runs `mre plan` on the fixture's invocation as the project's PLAN
+// runs it, finding the pipelines' version on the include path the stage
+// tasks find the code on, and returns that version, which every stage task
+// gets.
+func (rp *cgReplay) plan() string {
+	rp.t.Helper()
+
+	work := filepath.Join(rp.tmp, "cg", "plan")
+	argv := []string{
+		"plan", "-build", mreBuild(rp.t), "-values", writeTestFile(rp.t, filepath.Join(work, "values.json"), "{}"),
+		"-psid", "mrp", "-work", work, "-host-in-place", "-code-mropath", rp.dir,
+		"-local-cores", strconv.Itoa(mrpLocalCores), "-local-mem-gb", strconv.Itoa(mrpLocalMemGB),
+	}
+
+	for _, out := range []string{"call", "nodes", "roots", "leaves", "files", "pipelines"} {
+		argv = append(argv, "-"+out, filepath.Join(work, out))
+	}
+
+	if rp.overrides != "" {
+		argv = append(argv, "-overrides", rp.overrides)
+	}
+
+	if stderr, err := rp.mre(argv...); err != nil {
+		rp.t.Fatalf("%v\n%s", err, stderr)
+	}
+
+	v, err := os.ReadFile(filepath.Join(work, "pipelines"))
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	return string(v)
+}
+
+// mreBuild is the build of the repo's mre, which `mre plan` requires of
+// the project it plans.
+func mreBuild(t *testing.T) string {
+	t.Helper()
+
+	out, err := exec.Command(filepath.Join(root, "mre"), "version").Output()
+	if err != nil {
+		t.Fatalf("mre version: %v", err)
+	}
+
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "mre ")
 }
 
 // runTask runs one task of an instance that its first task found enabled,

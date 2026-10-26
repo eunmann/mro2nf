@@ -139,10 +139,10 @@ func (r Runtime) jobInfo(j *job) *core.JobInfo {
 }
 
 // env is the job's environment (core/jobmanager_local.go:515): mre's own,
-// each thread variable set to the job's whole threads, and TMPDIR the
-// job's tmp dir (core/node.go:1125).
-func (j *job) env() []string {
-	envs := map[string]string{}
+// each thread variable set to the job's whole threads, TMPDIR the job's
+// tmp dir (core/node.go:1125) and MRO_UUID the run's pipestance uuid.
+func (j *job) env(uuid string) []string {
+	envs := map[string]string{"MRO_UUID": uuid}
 
 	n := strconv.Itoa(int(math.Ceil(j.res.Threads)))
 	for _, k := range Settings().ThreadEnvs {
@@ -163,7 +163,7 @@ func (r Runtime) run(ctx context.Context, code Code, j *job) error {
 	name, argv := r.argv(code, j)
 	cmd := exec.CommandContext(ctx, name, argv...)
 	cmd.Dir = j.files()
-	cmd.Env = j.env()
+	cmd.Env = j.env(r.UUID)
 	cmd.SysProcAttr = util.Pdeathsig(&syscall.SysProcAttr{}, syscall.SIGTERM)
 	cmd.WaitDelay = orphanStdioGrace
 

@@ -226,15 +226,40 @@ func TestThreadEnvs(t *testing.T) {
 	}
 }
 
+// TestJobsGetThePipestanceUUID (#625): every job runs with MRO_UUID the
+// run's pipestance uuid, over the value it inherits, as mrp sets it for
+// each job (core/pipestance.go:879 SetUuid), which the adapter's
+// martian.get_pipestance_uuid() returns.
+func TestJobsGetThePipestanceUUID(t *testing.T) {
+	t.Setenv("MRO_UUID", "inherited")
+
+	const uuid = "6ba7b810-9dad-41d1-80b4-00c04fd430c8"
+
+	got, _ := runJobEnv(t, func(r *Runtime, _ *Stage) { r.UUID = uuid })
+	if got["MRO_UUID"] != uuid {
+		t.Errorf("MRO_UUID = %q in the job's environment, want the run's %q", got["MRO_UUID"], uuid)
+	}
+}
+
 // jobEnv runs a main job requesting threads, granted from pool, and
 // returns the environment it ran with and its metadata dir.
 func jobEnv(t *testing.T, pool Pool, threads float64) (map[string]string, string) {
 	t.Helper()
 
+	return runJobEnv(t, func(r *Runtime, s *Stage) {
+		r.Local = pool
+		s.Using = &core.JobResources{Threads: threads}
+	})
+}
+
+// runJobEnv runs a main job under the runtime and stage edit sets and
+// returns the environment it ran with and its metadata dir.
+func runJobEnv(t *testing.T, edit func(*Runtime, *Stage)) (map[string]string, string) {
+	t.Helper()
+
 	s, inv := stage(t, "file_min", "FP.WRITE", `env > "$meta/env"; touch "$meta/_complete"`)
-	s.Using = &core.JobResources{Threads: threads}
 	r := runtime(t, inv)
-	r.Local = pool
+	edit(&r, &s)
 
 	if _, err := r.Main(context.Background(), Instance{Stage: s, ForkID: "fork0"}, core.LazyArgumentMap{}, Unsplit()); err != nil {
 		t.Fatal(err)

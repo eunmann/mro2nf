@@ -223,7 +223,7 @@ func stageEcho(t *testing.T, root, value string, planFlags, flags []string) {
 	t.Chdir(t.TempDir())
 
 	if _, err := mreIn(t, mro, append([]string{
-		"plan", "-psid", "mrp", "-s3-mount", root, "-work", "plan",
+		"plan", "-build", testBuild(), "-psid", "mrp", "-s3-mount", root, "-work", "plan",
 		"-call", "plan/call", "-nodes", "plan/nodes", "-roots", "plan/roots", "-leaves", "plan/leaves", "-files", "plan/files",
 	},
 		planFlags...)...); err != nil {

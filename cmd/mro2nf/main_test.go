@@ -6,7 +6,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -46,7 +45,7 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 	}
 
 	cfg := readConfig(t, out)
-	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.mro2nf_s3_mount = null", "params.x = null"} {
+	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.mro2nf_s3_mount = null"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("conf/base.config lacks %q:\n%s", want, cfg)
 		}
@@ -54,6 +53,17 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(out, "stage.nf")); err != nil {
 		t.Errorf("no stage module: %v", err)
+	}
+
+	mainNF, err := os.ReadFile(filepath.Join(out, "main.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"\n    x: Object? = default_x()\n", "\ndef default_x() {\n    return 42\n}\n"} {
+		if !strings.Contains(string(mainNF), want) {
+			t.Errorf("main.nf does not declare the entry input x with the call's value, %q:\n%s", want, mainNF)
+		}
 	}
 }
 
@@ -157,36 +167,6 @@ func TestBuildVersionReachesOptions(t *testing.T) {
 
 			if opts.Version != stamp {
 				t.Errorf("Version = %q, want %q", opts.Version, stamp)
-			}
-		})
-	}
-}
-
-// TestChooseVersion checks an unstamped build takes the module version Go
-// stamps, so builds of different commits get different -resume cache keys
-// (#449), and stays dev only when Go stamps none.
-func TestChooseVersion(t *testing.T) {
-	const pseudo = "v0.5.1-0.20261011171927-bab46362db39+dirty"
-
-	withMain := func(v string) *debug.BuildInfo {
-		return &debug.BuildInfo{Main: debug.Module{Path: "github.com/eunmann/mro2nf", Version: v}}
-	}
-
-	for _, tc := range []struct {
-		name  string
-		stamp string
-		info  *debug.BuildInfo
-		want  string
-	}{
-		{"ldflags_stamp_wins", "v1.2.3", withMain(pseudo), "v1.2.3"},
-		{"module_version", "dev", withMain(pseudo), pseudo},
-		{"devel", "dev", withMain("(devel)"), "dev"},
-		{"empty_module_version", "dev", withMain(""), "dev"},
-		{"no_build_info", "dev", nil, "dev"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := chooseVersion(tc.stamp, tc.info); got != tc.want {
-				t.Errorf("chooseVersion(%q) = %q, want %q", tc.stamp, got, tc.want)
 			}
 		})
 	}

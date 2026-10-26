@@ -6,7 +6,9 @@ A run takes two kinds of parameter: the pipeline's own inputs, and the
 ## Pipeline inputs
 
 Each input of the entry pipeline is a parameter of the same name. When it is
-unset, the run uses the value in the `.mro`'s `call`.
+unset, the run uses the value in the `.mro`'s `call`, which `main.nf`'s
+`params` block declares as its default. Any value a launch gives replaces it:
+`null` and every string included.
 
 The run's first task, PLAN, compiles the call with the launch values. So a
 launch value changes forks, disabled calls and chunk counts exactly as the
@@ -19,6 +21,7 @@ same value written in the `.mro` would under `mrp`.
 | `int`, `float`, `bool`, `string` | command line or `-params-file` | `--n 5 --scale 2.5 --skip false` |
 | array, map, struct | typed JSON in a `-params-file` | `{"values": [5, 6, 7]}` |
 | an input the top-level `map call` splits | Martian's split form in a `-params-file` | `{"x": {"split": [4, 5]}}` |
+| `null`, as a `null` in the `.mro`'s `call` | `null` in a `-params-file` (on the command line, `--n null` is the string `null`) | `{"n": null}` |
 | `file`, `path`, a `filetype` | an absolute path or an `s3://` URI | `--reads /data/r1.fastq` |
 | an input whose name starts with `_` | `--_name=value` (Nextflow reads only a name starting with a letter or digit in `--name value`) | `--_tag=x` |
 
@@ -107,7 +110,7 @@ types are not Martian's. On 26.04:
 |---|---|---|
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file ([Resources and retries](resources-and-retries.md#mrp---overrides)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job that exceeds its memory request |
-| `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in; the container profiles always do this |
+| `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in, unless it lies in a file input read in place or the S3 mount, or the output names a path in the pipeline's code (its include path and stage code directories); the container profiles always do this |
 | `--mro2nf_image <image>` | none | the image every task runs in; required by the container profiles |
 | `--mro2nf_mre <path>` | `mre` on `PATH` | the `mre` the tasks run |
 | `--mro2nf_mrjob <path>` | the `mrjob` beside `mre` | the `mrjob` that runs `py` and `comp` stages |

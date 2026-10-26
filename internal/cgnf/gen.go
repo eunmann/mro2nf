@@ -40,10 +40,11 @@ func (p *project) workflows() (map[string]string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("include { shq ; code ; ordered ; bundlesOf ; refBundles ; skeletons ; bundleLocations ; recordsOf ; published ; callStaged ; pool ; OUTS ; CALL ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
+	b.WriteString("include { shq ; code ; ordered ; bundlesOf ; refBundles ; skeletons ; bundleLocations ; recordsOf ; published ; callStaged ; pool ; changed ; OUTS ; CALL ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	b.WriteString(p.paramsBlock())
+	b.WriteString(p.defaultFuncs())
 	b.WriteString(planProcess)
 	b.WriteString("workflow {\n    main:\n")
 	writeLines(&b, plan.lines)
@@ -140,9 +141,40 @@ func alias(i int, fqid string) string {
 	return "N" + strconv.Itoa(i) + "_" + fqid[strings.LastIndex(fqid, ".")+1:]
 }
 
-// gstr is s as a Groovy single-quoted string literal.
+// gstr is s as a Groovy single-quoted string literal, which cannot hold a
+// line break, so every control character is escaped.
 func gstr(s string) string {
-	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s) + "'"
+	var b strings.Builder
+
+	b.WriteByte('\'')
+
+	for _, c := range []byte(s) {
+		switch c {
+		case '\\', '\'':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if c < ' ' {
+				fmt.Fprintf(&b, `\u%04x`, c)
+			} else {
+				b.WriteByte(c)
+			}
+		}
+	}
+
+	b.WriteByte('\'')
+
+	return b.String()
 }
 
 func glist(ss []string) string {
@@ -164,9 +196,10 @@ func ilist(xs []int) string {
 }
 
 // planWiring parses PLAN's records the wirings read: shared is the meta
-// every task shares, with the launch params their scripts read (stageRun)
-// and the run's call, inline when its encoding is at
-// most cg.MaxValueBytes, as an output value is, or else staged (CALL);
+// every task shares, with the launch params their scripts read (stageRun),
+// the pipelines' version every job records and the run's call, inline when
+// its encoding is at most cg.MaxValueBytes, as an output value is, or else
+// staged (CALL), one value, as combine makes a queue of two values;
 // nodes maps each witness node to its digest, its off flag, its statically
 // disabled fork keys, the cpus and memory its first task is scheduled with
 // and its own overrides, paired with shared, which a node then reads from
@@ -188,7 +221,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	w.linef("}")
 	w.linef("PLAN(%s, %s, workflow.workDir.toUriString(), file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(planRun), mroAssets)
-	w.linef("%s = CALL(PLAN.out.call, %d).map { c -> %s }", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c", stageRun))
+	w.linef("%s = CALL(PLAN.out.call, %d).combine(PLAN.out.pipelines).map { c, v -> %s }.first()", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c", "pipelines: v", stageRun))
 
 	for _, d := range []struct{ name, expr string }{
 		{"nodes", "NODES(PLAN.out.nodes, shared)"},
@@ -210,9 +243,15 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 // 26.04.0-26.04.1 on none its script reads (nextflow-io/nextflow#7156), so
 // a changed param would silently reuse a stale task. A boolean is the Boolean the params block
 // types it as, so a launch's --<name> false keys as its default false does.
+// A stage task's uuid is the run's pipestance uuid its jobs get as
+// MRO_UUID: the launch environment's MRO_FORCE_UUID, as mrp honours it
+// (core/runtime.go:446), or else the Nextflow session id, which a -resume
+// keeps, as mrp's restart keeps the pipestance's uuid, and which keys
+// every task already. Its workdir is the run's work dir, whose tasks' files
+// lie under no read-only root, though an include path may hold it.
 const (
 	planRun  = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, host_inputs: params.mro2nf_host_inputs, host_in_place: params.mro2nf_host_in_place, remote_inputs: params.mro2nf_allow_remote_inputs, s3_mount: params.mro2nf_s3_mount, local_jobs: params.mro2nf_local_jobs]"
-	stageRun = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, mrjob: params.mro2nf_mrjob, adapters: params.mro2nf_adapters, monitor: params.mro2nf_monitor, confine: params.mro2nf_confine, s3_mount: params.mro2nf_s3_mount, host_in_place: params.mro2nf_host_in_place, local_jobs: params.mro2nf_local_jobs]"
+	stageRun = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, uuid: env('MRO_FORCE_UUID') ?: workflow.sessionId.toString(), mrjob: params.mro2nf_mrjob, adapters: params.mro2nf_adapters, monitor: params.mro2nf_monitor, confine: params.mro2nf_confine, s3_mount: params.mro2nf_s3_mount, host_in_place: params.mro2nf_host_in_place, local_jobs: params.mro2nf_local_jobs, workdir: workflow.workDir.toUriString()]"
 )
 
 // graphMeta is the meta map naming the entry .mro and the include path the

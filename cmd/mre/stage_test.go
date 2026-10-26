@@ -235,7 +235,7 @@ func splitTasks(node string, in ...string) [][]string {
 // stageTasks are a run of stageMRO's enabled tasks, in dependency order,
 // each fork of EACH given its fork record as a value.
 func stageTasks(records []string) [][]string {
-	tasks := append(splitTasks("P.SQ", "-leaves", "0"), unsplitTask("P.ADD", "add", "-values", "jn/values"), unsplitTask("P.CP", "cp", "-leaves", "0"))
+	tasks := append(splitTasks("P.SQ", "-leaves", "leaves"), unsplitTask("P.ADD", "add", "-values", "jn/values"), unsplitTask("P.CP", "cp", "-leaves", "leaves"))
 	for i, rec := range records {
 		tasks = append(tasks, unsplitTask("P.EACH", "each"+strconv.Itoa(i), "-fork", rec))
 	}
@@ -244,8 +244,9 @@ func stageTasks(records []string) [][]string {
 }
 
 // stageWork makes a new task work dir at work and enters it, as a run's
-// tasks find theirs: the entry file staged as entry/1/, and the forks of
-// EACH PLAN fixed. It returns their fork records.
+// tasks find theirs: the entry file staged as entry/1/, its index in the
+// leaves file, and the forks of EACH PLAN fixed. It returns their fork
+// records.
 func stageWork(t *testing.T, mro, work string) []string {
 	t.Helper()
 
@@ -255,6 +256,7 @@ func stageWork(t *testing.T, mro, work string) []string {
 
 	t.Chdir(work)
 	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
+	writeTestFile(t, "leaves", "0\n")
 
 	entryForks(t, graphFlags{entry: mro}, "plan")
 
@@ -317,12 +319,14 @@ func snapshot(t *testing.T, dir string) map[string]string {
 // reading that total; CP, reading the entry file through its args bundle's
 // link; and each fork of the map call EACH, given its fork record as a
 // value. Each task runs its job in its own work dir, and a join missing a
-// chunk's outs runs none.
+// chunk's outs runs none. Every job's _jobinfo records the pipelines'
+// version PLAN found, not one the task finds on the include path, which a
+// commit during the run would change (#625).
 func TestStageTasks(t *testing.T) {
 	mro, work := writeStagePipeline(t), t.TempDir()
 
 	for _, argv := range stageTasks(stageWork(t, mro, work)) {
-		if _, err := mreIn(t, mro, argv...); err != nil {
+		if _, err := mreIn(t, mro, append(argv, "-pipelines-version", "v-planned")...); err != nil {
 			t.Fatalf("mre %v: %v", argv, err)
 		}
 	}
@@ -346,6 +350,20 @@ func TestStageTasks(t *testing.T) {
 		if got := readText(t, filepath.Join(meta, stageNameFile)); got != stage {
 			t.Errorf("the job in %s ran %q, want %s", meta, got, stage)
 		}
+
+		var info struct {
+			Version struct {
+				Pipelines string `json:"pipelines"`
+			} `json:"version"`
+		}
+
+		if err := json.Unmarshal([]byte(readText(t, filepath.Join(meta, "_jobinfo"))), &info); err != nil {
+			t.Fatal(err)
+		}
+
+		if info.Version.Pipelines != "v-planned" {
+			t.Errorf("the job in %s records the pipelines' version %q, want PLAN's v-planned", meta, info.Version.Pipelines)
+		}
 	}
 
 	tree := snapshot(t, work)
@@ -356,7 +374,7 @@ func TestStageTasks(t *testing.T) {
 
 	wantLinkedArgs(t, tree)
 
-	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-leaves", "0", "-args", "jn2/args", "-chunks", "sp/chunks",
+	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-leaves", "leaves", "-args", "jn2/args", "-chunks", "sp/chunks",
 		"-chunkouts", t.TempDir(), "-work", "jn2")
 	if !errors.Is(err, errNoChunk) {
 		t.Errorf("join without chunk outs: %v, want errNoChunk", err)

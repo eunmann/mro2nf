@@ -15,15 +15,21 @@ flowchart LR
 The runtime image is `ghcr.io/eunmann/mro2nf-runtime:<tag>`. It has `mre`,
 `mrjob` and the Martian adapters at `/opt/mro2nf` on its `PATH`, on a
 `python:3.12-slim` base. Use the tag of the mro2nf release that transpiled the
-project (what `mro2nf -version` prints for a release build), so `mre` matches
-the project.
+project (what `mro2nf -version` prints for a release build): PLAN fails a run
+whose `mre` is another build than the `mro2nf` that transpiled the project,
+with `project transpiled by <build>, mre is <build>`.
 
 For a build of an unreleased commit, build the runtime image from the same
-checkout:
+checkout, with `--build-arg VERSION` set to the build your `mro2nf` names, so
+the image's `mre` names the same one:
 
 ```bash
-docker build -f deploy/runtime/Dockerfile -t mro2nf-runtime:local .
+docker build --build-arg VERSION="$(mro2nf -version | cut -d' ' -f2)" \
+  -f deploy/runtime/Dockerfile -t mro2nf-runtime:local .
 ```
+
+Without it, the image's `mre` is the build `dev`, which matches only an
+`mro2nf` that is `dev` too, such as one built in a git worktree.
 
 ## Your pipeline's image
 

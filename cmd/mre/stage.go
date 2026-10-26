@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"slices"
 
 	"github.com/eunmann/mro2nf/internal/cg"
@@ -42,6 +43,7 @@ func runStage(ctx context.Context, argv []string) error {
 
 	root := fs.String("s3-mount", "", "the root every task mounts the input buckets under, read-only, whose paths the task's bundles name as they are, as they do the entry file values every task reads in place")
 	host := fs.Bool("host-in-place", false, "every task reads a head-node entry file value in place, as PLAN planned it under the same flag")
+	runWork := fs.String("run-workdir", "", "the run's work dir, whose tasks' files are under no read-only root; a URI holds no path")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -57,7 +59,7 @@ func runStage(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	roots, err := taskRoots(g, cg.ReadInPlace{Mount: mount, Host: *host}, s.run.rt.Work)
+	roots, err := taskRoots(g, cg.ReadInPlace{Mount: mount, Host: *host}, s.run.rt.Work, *runWork)
 	if err != nil {
 		return err
 	}
@@ -68,18 +70,49 @@ func runStage(ctx context.Context, argv []string) error {
 }
 
 // taskRoots are the run's read-only roots as a task in work reads them:
-// none holds the task's own files.
-func taskRoots(g *cg.Graph, in cg.ReadInPlace, work string) (shim.Roots, error) {
-	roots, err := g.Roots(in)
+// none holds the task's own files, nor, where the run's work dir runWork is
+// a path, any task's, which an include path may hold.
+func taskRoots(g *cg.Graph, in cg.ReadInPlace, work, runWork string) (shim.Roots, error) {
+	roots, err := g.Roots(in, codeDirs(g)...)
 	if err != nil {
 		return shim.Roots{}, fmt.Errorf("stage: %w", err)
 	}
 
-	if roots, err = roots.Except(work); err != nil {
-		return shim.Roots{}, fmt.Errorf("stage: %w", err)
+	except := []string{work}
+	if filepath.IsAbs(runWork) {
+		except = append(except, runWork)
+	}
+
+	for _, dir := range except {
+		if roots, err = roots.Except(dir); err != nil {
+			return shim.Roots{}, fmt.Errorf("stage: %w", err)
+		}
 	}
 
 	return roots, nil
+}
+
+// codeDirs are the dirs of g's stages' code, each found as mrp finds it
+// (job.NewStage): a py stage's own dir, and the dir of any other stage's
+// program. A stage whose code is not found adds none, as nothing lies in
+// it; the task that runs it fails finding it.
+func codeDirs(g *cg.Graph) []string {
+	var dirs []string
+
+	for st := range g.Stages() {
+		s, err := job.NewStage(st, g.MroPaths())
+		if err != nil {
+			continue
+		}
+
+		if s.Code.Type == syntax.PythonStage {
+			dirs = append(dirs, s.Code.Cmd)
+		} else {
+			dirs = append(dirs, filepath.Dir(s.Code.Cmd))
+		}
+	}
+
+	return dirs
 }
 
 func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {

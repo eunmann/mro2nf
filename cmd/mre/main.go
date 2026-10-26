@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/buildinfo"
 	"github.com/eunmann/mro2nf/internal/job"
 )
 
@@ -52,7 +53,7 @@ func run(ctx context.Context, args []string) error {
 
 	if args[0] == "version" {
 		// Writing the version line to stdout cannot meaningfully fail.
-		_, _ = fmt.Fprintln(os.Stdout, "mre", version)
+		_, _ = fmt.Fprintln(os.Stdout, "mre", buildinfo.Version(version))
 
 		return nil
 	}

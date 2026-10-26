@@ -29,7 +29,7 @@ func TestSubcommandsRefuseBadInputs(t *testing.T) {
 		"stage node":        stage("-phase", "split", "-node", "PP.NONE"),
 		"stage args":        {"stage", "-entry", mro, "-phase", "join", "-node", "PP.SUMX", "-args", absent},
 		"plan flag":         {"plan", "-bogus"},
-		"plan entry":        {"plan", "-entry", absent},
+		"plan entry":        {"plan", "-build", testBuild(), "-entry", absent},
 	}
 
 	for name, argv := range cases {

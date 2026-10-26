@@ -86,9 +86,11 @@ func (g *Graph) EntryLeaves() ([]EntryLeaf, error) {
 	return out, nil
 }
 
-// Roots are the read-only roots of the run's tasks: the S3 mount, and each
-// entry file value in reads in place.
-func (g *Graph) Roots(in ReadInPlace) (shim.Roots, error) {
+// Roots are the read-only roots of the run's tasks: the S3 mount, each
+// entry file value in reads in place, and the pipeline's code, its include
+// path and its stages' code dirs, code, which every task finds at the paths
+// the project was transpiled from, on the host or in the image.
+func (g *Graph) Roots(in ReadInPlace, code ...string) (shim.Roots, error) {
 	leaves, err := g.EntryLeaves()
 	if err != nil {
 		return shim.Roots{}, err
@@ -102,7 +104,7 @@ func (g *Graph) Roots(in ReadInPlace) (shim.Roots, error) {
 		}
 	}
 
-	return shim.NewRoots(paths...), nil
+	return shim.NewRoots(paths...).WithCode(slices.Concat(g.mroPaths, code)...), nil
 }
 
 // entryFileValues are every file value of the call's arguments, each once,
