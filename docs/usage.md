@@ -511,7 +511,10 @@ A file input is an absolute path or an `s3://` URI. Other schemes need
 | absolute path | read in place | staged | refused, unless under `/mnt/s3` | refused |
 | `s3://` URI | staged | staged | read in place if its bucket is mounted, else staged | staged |
 
-A stage given a path read in place sees that path, as under `mrp`. A stage
+A stage given a path read in place sees that path, as under `mrp`. An output
+naming a file outside the run's work dir by a path the run was not given,
+such as an input's `os.path.realpath`, makes its task look up the real path
+of every input read in place, once. A stage
 given a staged file sees a path in its own task directory with the same name
 and content (divergence `staged-input-paths`). On the local and grid profiles,
 an input that is or holds the run's work directory is refused.
