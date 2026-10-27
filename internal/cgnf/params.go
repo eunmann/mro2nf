@@ -192,16 +192,16 @@ func inputParams() []paramBlock {
 			},
 		},
 		{
-			comment: `// mrp's --overrides file, over each stage's resources; PLAN reads it as
-// mrp does.`,
+			comment: `// mrp's --overrides file, over each stage's resources and profiles; PLAN
+// reads it as mrp does.`,
 			params: []launchParam{overridesParam()},
 		},
 	}
 }
 
 func overridesParam() launchParam {
-	p := stringParam("mro2nf_overrides", nil, "file-path", "mrp's --overrides file, over each stage's resources")
-	p.omics = "an s3:// URI of mrp's --overrides file, over each stage's resources"
+	p := stringParam("mro2nf_overrides", nil, "file-path", "mrp's --overrides file, over each stage's resources and profiles")
+	p.omics = "an s3:// URI of mrp's --overrides file, over each stage's resources and profiles"
 
 	return p
 }
