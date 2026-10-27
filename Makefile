@@ -122,7 +122,7 @@ SCALE_TIMEOUT ?= 1100m
 test-scale: build ## Nightly scale tier: bench shapes at production widths (SCALE_RUN=<-run regexp> SCALE_WIDTH=<n>)
 	$(GO_E2E) -timeout $(SCALE_TIMEOUT) -run '$(SCALE_RUN)'
 
-test-cellranger: build ## Real-CellRanger differential baseline (opt-in; set CELLRANGER_HOME=<extracted bundle>)
+test-cellranger: build ## Real-CellRanger differential: mrp twice vs local and cloud-sim Nextflow, ~8 min (opt-in; set CELLRANGER_HOME=<extracted bundle>)
 	$(GO_E2E) -timeout 30m -run '^TestCellRanger'
 
 # The corpus sweeps (#653) over the pipelines whose MROPATH CORPUS is, beside

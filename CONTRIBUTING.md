@@ -77,7 +77,7 @@ The bar is `mrp` itself. Every difference a test finds must match an entry of
 | Generative | `make gen-diff` | random programs from `test/gen` under both runners; a difference is shrunk to a minimal fixture |
 | Docker | `make test-e2e-docker` | container isolation, the AWS Batch profile run on local Docker, the HealthOmics package |
 | Overhead | `make bench`, `make test-scale` | tasks, staged bytes and driver heap at two widths per shape ([design](docs/design.md#the-overhead-rule)) |
-| Cell Ranger | `make test-cellranger` | Cell Ranger 10.1.0 `testrun` under both runners, `metrics_summary.csv` byte for byte; needs a licensed bundle, never in CI |
+| Cell Ranger | `make test-cellranger` | Cell Ranger 10.1.0 `testrun` under `mrp` twice and under Nextflow locally and in the cloud simulation: the published tree byte for byte (each file `mrp` itself varies run to run by its stable part) and one stage task per `mrp` job; needs a licensed bundle, never in CI |
 | Corpus | `make test-corpus CORPUS=<mropath>` | every pipeline and stage under the MROPATH, invoked with its inputs unset, through Martian's compiler, the unit tests' call-graph sweeps and `nextflow lint`, then under both runners with every stage replaced by the generative differential's stub, under `CORPUS_SEEDS` seeds (`TestCorpusStubDiff`). The MIT corpus in `testdata/corpus` runs in `make test`, `make lint-nf` and `make test-e2e`, the AGPL repos in the nightly. Point it at your own licensed pipelines, such as a Cell Ranger install's `mro` dir; they never run in CI |
 
 e2e tests carry the `e2e` build tag and always run with `-count=1`. A fixture
