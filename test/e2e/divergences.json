@@ -130,15 +130,15 @@
       "feature": "`(volatile)` / `volatile = strict`",
       "summary": "mro2nf ignores `volatile` and deletes no file mid-run, so `work/` keeps every intermediate file mrp's volatile data removal (VDR) deletes once its consumers finish (higher peak disk).",
       "justification": "VDR deletes only files no later stage reads and never a published output: `vdr_volatile` publishes what mro2nf does under mrp's rolling and strict VDR, while mrp deletes the volatile file its consumer has read.",
-      "evidence": ["TestMrpDiffVDR/rolling", "TestMrpDiffVDR/strict", "TestMrpDiff/kitchen_sink"]
+      "evidence": ["TestMrpDiffVDR/vdr_volatile/rolling", "TestMrpDiffVDR/vdr_volatile/strict", "TestMrpDiff/kitchen_sink"]
     },
     {
       "id": "retain-no-vdr",
       "kind": "mechanism",
       "feature": "stage / pipeline `retain`",
       "summary": "`retain` has nothing to do under mro2nf, which deletes no file, so every file is kept.",
-      "justification": "`retain` only exempts a file from VDR. `vdr_volatile` retains a volatile stage's file and publishes what mro2nf does under mrp's rolling and strict VDR.",
-      "evidence": ["TestMrpDiffVDR/rolling", "TestMrpDiffVDR/strict"]
+      "justification": "`retain` only exempts a file from VDR. `vdr_volatile` retains a volatile stage's file and publishes what mro2nf does under mrp's rolling and strict VDR, and Martian's `retain_test` retains two stage files, one through a sub-pipeline's output, and publishes what mro2nf does under strict VDR.",
+      "evidence": ["TestMrpDiffVDR/vdr_volatile/rolling", "TestMrpDiffVDR/vdr_volatile/strict", "TestMrpDiffVDR/retain_test/strict"]
     },
     {
       "id": "outs-files-copied",

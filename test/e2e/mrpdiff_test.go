@@ -686,6 +686,15 @@ var mrpDiffCases = []mrpDiffCase{
 	// keys scoped to a stage, a sub-pipeline, the top-level pipeline, an
 	// aliased call and a map call, over a split's chunk and join requests.
 	{name: "overrides_resources", overrides: "overrides.json"},
+	// Martian's own integration tests (testdata/NOTICE.martian), each run as
+	// its run_test.sh runs it. disable_test's one-core, 1 GB pool there
+	// bounds only how many jobs run at once. retain_test's --vdrmode=strict
+	// is TestMrpDiffVDR's.
+	{name: "files_test"},
+	{name: "struct_test"},
+	{name: "fork_test"},
+	{name: "disable_test"},
+	{name: "retain_test"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -753,6 +762,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// #585: an entry input named with a Groovy keyword. mrp runs it; mro2nf
 	// refuses the transpile (transpileRefused).
 	{name: "keyword_input", mrp: runOutcome{}, divergence: "keyword-input"},
+	// Martian's exit_test: EXIT asserts.
+	{name: "exit_test", mrp: failedIn(failAssert, "EXIT")},
+	// Martian's monitor_test: under --monitor, mrjob kills EXCEED_RESERVATION
+	// over its 0.01 GB request.
+	{name: "monitor_test", mrp: failedIn(failError, "EXCEED_RESERVATION"), monitor: true},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -1021,6 +1035,11 @@ func (c mrpOutcomeCase) flags(dir string) ([]string, []string) {
 	mrpFlags, nfFlags := overridesFlags(dir, c.overrides)
 	if c.params != "" {
 		nfFlags = append(nfFlags, "-params-file", filepath.Join(dir, c.params))
+	}
+
+	if c.monitor {
+		mrpFlags = append(mrpFlags, "--monitor")
+		nfFlags = append(nfFlags, "--mro2nf_monitor", "true")
 	}
 
 	return mrpFlags, nfFlags

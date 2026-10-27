@@ -8,9 +8,28 @@ file:
     Copyright (c) 2014-2017 10x Genomics, Inc.
     Copyright (c) 2014-2017 Martian Authors
 
+The test/<name>/ copies keep Martian's stage code and .mro files. They drop
+what only Martian's own harness reads: BUILD.bazel, run scripts, test specs
+(*.json), expected pipestances, .gitignore and .gitattributes; split_test/
+keeps them all. Where Martian's invocation is call.mro beside a pipeline.mro
+it includes, the copy names the invocation pipeline.mro, as every mro2nf
+fixture does, and the included file as noted.
+
 testdata/ path                            Martian path
 --------------------------------------    ---------------------------------------------
 split_test/                               test/split_test/
+files_test/                               test/files_test/; pipeline.mro is call.mro,
+                                          awesome.mro is pipeline.mro
+struct_test/                              test/struct_test/; pipeline.mro is call.mro,
+                                          outer.mro is pipeline.mro
+retain_test/                              test/retain_test/; pipeline.mro is call.mro,
+                                          awesome.mro is pipeline.mro
+fork_test/                                test/fork_test/
+disable_test/                             test/disable_test/; pipeline.mro is the file
+                                          its link names,
+                                          martian/syntax/testdata/disable_pipeline.mro
+exit_test/                                test/exit_test/
+monitor_test/                             test/monitor_test/
 corpus/disable_bindings.mro               martian/syntax/testdata/disable_bindings.mro
 corpus/map_call_test.mro                  martian/syntax/testdata/map_call_test.mro
 corpus/resolve_test.mro                   martian/syntax/testdata/resolve_test.mro
