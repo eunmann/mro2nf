@@ -672,6 +672,37 @@ func TestNightlyCorpusFetchesPinnedAGPL(t *testing.T) {
 	}
 }
 
+// TestNightlyCorpusRunsStubDifferential requires the corpus job to set up
+// the mrp its make test-corpus runs the stub differential (#654) under, and
+// to upload, only when it failed, the harness's run logs and divergence
+// fixtures under a name unique to the matrix entry.
+func TestNightlyCorpusRunsStubDifferential(t *testing.T) {
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("corpus")
+	steps := job.get("steps").items
+
+	martian := slices.IndexFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("uses")) == "./.github/actions/setup-martian" })
+	sweep := slices.IndexFunc(steps, func(s *yamlNode) bool { return strings.HasPrefix(scalarOf(s.get("run")), "make test-corpus ") })
+	upload := slices.IndexFunc(steps, func(s *yamlNode) bool { return strings.HasPrefix(scalarOf(s.get("uses")), uploadArtifact) })
+
+	if martian < 0 || sweep < martian || upload < sweep {
+		t.Fatalf("%s corpus job: setup-martian at step %d, make test-corpus at %d, upload-artifact at %d; want them in that order",
+			nightlyWorkflow, martian, sweep, upload)
+	}
+
+	step := steps[upload]
+	if got := scalarOf(step.get("if")); got != "${{ failure() }}" {
+		t.Errorf("%s corpus job upload runs if %q, want only on failure", nightlyWorkflow, got)
+	}
+
+	if got := scalarOf(step.get("with").get("path")); got != e2eArtifactsDefault+"/" {
+		t.Errorf("%s corpus job uploads %q, want the harness's %s/", nightlyWorkflow, got, e2eArtifactsDefault)
+	}
+
+	if name := scalarOf(step.get("with").get("name")); !strings.Contains(name, "${{ strategy.job-index }}") {
+		t.Errorf("%s corpus job artifact %q does not name its matrix entry, so the entries' uploads collide", nightlyWorkflow, name)
+	}
+}
+
 // runCorpusSteps runs scripts in order under env with a fake git and make
 // on PATH, and returns the calls they made.
 func runCorpusSteps(t *testing.T, scripts, env []string) []string {
