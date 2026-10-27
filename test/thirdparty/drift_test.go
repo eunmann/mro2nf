@@ -140,12 +140,41 @@ func TestRetryPatternsMatchModule(t *testing.T) {
 // settings of mrp's jobmanagers/config.json, at the Martian commit go.mod
 // pins.
 func TestJobSettingsMatchModule(t *testing.T) {
+	config, path := moduleJobConfig(t)
+
+	if config.JobSettings == nil {
+		t.Fatalf("%s has no settings", path)
+	}
+
+	if diff := cmp.Diff(*config.JobSettings, job.Settings()); diff != "" {
+		t.Errorf("job.Settings drifted from %s (-module +mre):\n%s", path, diff)
+	}
+}
+
+// TestJobProfilesMatchModule: mre writes each job's profile_config from
+// exactly the profiles of mrp's jobmanagers/config.json, at the Martian
+// commit go.mod pins.
+func TestJobProfilesMatchModule(t *testing.T) {
+	config, path := moduleJobConfig(t)
+
+	if diff := cmp.Diff(config.ProfileMode, job.Profiles()); diff != "" {
+		t.Errorf("job.Profiles drifted from %s (-module +mre):\n%s", path, diff)
+	}
+}
+
+// moduleJobConfig is mrp's jobmanagers/config.json at the Martian commit
+// go.mod pins, and its path.
+func moduleJobConfig(t *testing.T) (core.JobManagerJson, string) {
+	t.Helper()
+
 	dir, err := ModuleDir(t.Context(), repoRoot, Vendored()[vendorMartian])
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(dir, "jobmanagers", "config.json"))
+	path := filepath.Join(dir, "jobmanagers", "config.json")
+
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,13 +184,7 @@ func TestJobSettingsMatchModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if config.JobSettings == nil {
-		t.Fatalf("%s has no settings", filepath.Join(dir, "jobmanagers", "config.json"))
-	}
-
-	if diff := cmp.Diff(*config.JobSettings, job.Settings()); diff != "" {
-		t.Errorf("job.Settings drifted from %s (-module +mre):\n%s", dir, diff)
-	}
+	return config, path
 }
 
 func TestDriftedFiles(t *testing.T) {

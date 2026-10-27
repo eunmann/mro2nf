@@ -29,11 +29,15 @@ func planResources(t *testing.T, work string) map[string]string {
 	return out
 }
 
+// escapedSpace is JSON's escape of a space, which a node's overrides holds
+// in place of one, as its line's fields are space-separated.
+const escapedSpace = `\` + "u0020"
+
 // TestPlanResolvesOverrides: mre plan schedules each node's first task, its
 // split or its one main, with the cpus and memory its job gets under the
 // run's mrp --overrides file, as mrp resolves them for overrides_resources,
 // and gives each node the overrides file of its own its jobs resolve
-// theirs under; without one, a node's using() alone.
+// theirs and their profiles under; without one, a node's using() alone.
 func TestPlanResolvesOverrides(t *testing.T) {
 	fx := fixtureDir(t, "overrides_resources")
 
@@ -46,11 +50,12 @@ func TestPlanResolvesOverrides(t *testing.T) {
 			"OVR.INNER.PREP": "1 1 -", "OVR.INNER.SQUARES": "1 1 -", "OVR.REPORT": "1 1 -", "OVR.OTHER": "1 1 -", "OVR.EACH": "1 1 -",
 		}},
 		{"overrides.json", []string{"-overrides", filepath.Join(fx, "overrides.json"), "-psid", "mrp"}, map[string]string{
-			"OVR.INNER.PREP":    `1 1.5 {"OVR.INNER.PREP":{"chunk.threads":0.5,"chunk.mem_gb":1.5}}`,
-			"OVR.INNER.SQUARES": `1 2.5 {"OVR.INNER.SQUARES":{"join.threads":1.5,"join.vmem_gb":7,"chunk.threads":1.25,"chunk.mem_gb":3,"split.mem_gb":2.5,"split.vmem_gb":6}}`,
-			"OVR.REPORT":        `1 1.5 {"OVR.REPORT":{"chunk.mem_gb":1.5}}`,
-			"OVR.OTHER":         `2 2.25 {"OVR.OTHER":{"chunk.threads":2,"chunk.mem_gb":2.25,"chunk.vmem_gb":5}}`,
-			"OVR.EACH":          `1 0.75 {"OVR.EACH":{"chunk.mem_gb":0.75}}`,
+			"OVR.INNER.PREP": `1 1.5 {"OVR.INNER.PREP":{"chunk.threads":0.5,"chunk.mem_gb":1.5,"chunk.profile":"disable"}}`,
+			"OVR.INNER.SQUARES": `1 2.5 {"OVR.INNER.SQUARES":{"join.threads":1.5,"join.vmem_gb":7,"join.profile":"mem",` +
+				`"chunk.threads":1.25,"chunk.mem_gb":3,"chunk.profile":"cpu","split.mem_gb":2.5,"split.vmem_gb":6,"split.profile":"mem"}}`,
+			"OVR.REPORT": `1 1.5 {"OVR.REPORT":{"chunk.mem_gb":1.5,"chunk.profile":"cpu"}}`,
+			"OVR.OTHER":  `2 2.25 {"OVR.OTHER":{"chunk.threads":2,"chunk.mem_gb":2.25,"chunk.vmem_gb":5,"chunk.profile":"cpu"}}`,
+			"OVR.EACH":   `1 0.75 {"OVR.EACH":{"chunk.mem_gb":0.75,"chunk.profile":"no` + escapedSpace + `such` + escapedSpace + `mode"}}`,
 		}},
 	}
 

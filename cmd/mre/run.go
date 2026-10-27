@@ -74,7 +74,7 @@ func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.rt.UUID, "uuid", "", "the run's pipestance uuid, which every job's environment holds as MRO_UUID")
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
 	fs.BoolVar(&f.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
-	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources (mre plan writes each node's own)")
+	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources and profile (mre plan writes each node's own)")
 	fs.StringVar(&f.pipelines, "pipelines-version", "", "the pipelines' version the job's _jobinfo records, which mre plan found for the run (-pipelines)")
 	definePool(fs, &f.rt.Local)
 }

@@ -54,7 +54,7 @@ silently: it fails the transpile or the run's PLAN, before any stage starts.
 | `martian` Python API | Supported | the real adapter runs |
 | `martian.alarm` | Supported | written to the task's stderr; no run-level summary |
 | output validation, `ASSERT` vs retryable errors | Supported | exit 42 is never retried, 75 is |
-| `--overrides`, `--monitor` | Supported | `--mro2nf_overrides`, `--mro2nf_monitor` |
+| `--overrides`, `--monitor` | Supported | `--mro2nf_overrides` (resources and `*.profile`), `--mro2nf_monitor` |
 | `--auto-adjust-memory`, `--strict` | Not supported | a `-c` config can raise memory per retry |
 
 ## Files and outputs

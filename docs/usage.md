@@ -141,8 +141,8 @@ whose inputs did not change.
 
 - A changed entry value re-runs every task: every task reads the run's call.
 - A changed `--mro2nf_psid` re-runs every task; `--mro2nf_monitor`, every
-  stage task and OUTS; an overrides file, the stages whose resources it
-  changes and the tasks after them.
+  stage task and OUTS; an overrides file, the stages whose resources or
+  profiles it changes and the tasks after them.
 - A `-c` change to `cpus` or `memory` re-runs nothing.
 - An input read in place is keyed on its path; a staged input on its path,
   size and modification time (a directory's own, not its files'). Give
@@ -353,7 +353,11 @@ nextflow run main.nf --mro2nf_overrides overrides.json
 
 PLAN reads the file with Martian's reader, so a key `mrp` does not know fails
 the run before any stage. Each job's resources resolve as under `mrp`, into its
-task and what the stage sees. `force_volatile` and `*.profile` keys have no
+task and what the stage sees. A `*.profile` key profiles the job as under
+`mrp`: the stage's adapter profiles `cpu`, `line` and `mem`, and `mrjob` runs
+`perf`, `pyspy` and `pyflame` from the task's `PATH`, logging and running the
+job unprofiled without it. The profile lands in the job's metadata directory
+([A task's work directory](#a-tasks-work-directory)). `force_volatile` has no
 effect.
 
 ### Size one stage

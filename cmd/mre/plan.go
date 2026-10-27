@@ -326,8 +326,15 @@ func nodeResources(rt job.Runtime, n cg.PlanNode) (string, error) {
 		return "", fmt.Errorf("plan: %w", err)
 	}
 
-	return fmt.Sprintf("%d %s %s", job.CPUs(res), strconv.FormatFloat(res.MemGB, 'f', -1, 64), orDash(string(over))), nil
+	line := strings.ReplaceAll(string(over), " ", jsonSpace)
+
+	return fmt.Sprintf("%d %s %s", job.CPUs(res), strconv.FormatFloat(res.MemGB, 'f', -1, 64), orDash(line)), nil
 }
+
+// jsonSpace is JSON's escape of a space, which a node's overrides holds in
+// place of each space, as its line's fields are space-separated: compact
+// JSON holds a space only inside a string, where the escape decodes to it.
+const jsonSpace = `\` + "u0020"
 
 func orDash(s string) string {
 	if s == "" {
