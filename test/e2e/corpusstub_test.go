@@ -35,7 +35,7 @@ import (
 // by why: each a known mro2nf defect.
 func corpusStubExcluded() map[string]string {
 	return map[string]string{
-		"martian/test/fork_test/pipeline.mro": "where a fork of the top-level map call publishes no file, mrp publishes " +
+		"martian/test/fork_test/pipeline.mro": "#664: where a fork of the top-level map call publishes no file, mrp publishes " +
 			"an empty outs/<key>/ and mro2nf nothing (seed 1: english)",
 	}
 }
