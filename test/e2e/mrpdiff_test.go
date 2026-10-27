@@ -668,6 +668,11 @@ var mrpDiffCases = []mrpDiffCase{
 	// A map call over a literal whose second row is a stage output, each
 	// row's forks staging only what their element reads.
 	{name: "map_literal_row_stage_ref"},
+	// #655: a reduce over a mapped sub-pipeline's literal output stages only
+	// what counting the map call's forks reads, not the outs of the mapped
+	// stage it forks over; map_test is Martian's own test/map_test.
+	{name: "merge_mapped_literal"},
+	{name: "map_test"},
 	// #621: a literal Martian expands from an entry collection, read alike
 	// at every width.
 	{name: "witness_merged_literal"},

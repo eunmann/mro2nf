@@ -30,6 +30,7 @@ disable_test/                             test/disable_test/; pipeline.mro is th
                                           martian/syntax/testdata/disable_pipeline.mro
 exit_test/                                test/exit_test/
 monitor_test/                             test/monitor_test/
+map_test/                                 test/map_test/
 split_test_go/                            test/split_test_go/; its sum_squares is not
                                           copied but built by the e2e harness from
                                           martian/test/sum_squares in the pinned module
