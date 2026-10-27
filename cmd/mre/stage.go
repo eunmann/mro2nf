@@ -133,7 +133,12 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return fmt.Errorf("stage: %w", err)
 	}
 
-	inst, args, err := s.args.write(g, s.run.args, s.run.refs)
+	spec, err := s.args.spec(g, s.run.args, s.run.refs)
+	if err != nil {
+		return err
+	}
+
+	inst, args, err := writeArgs(g, spec)
 	if err != nil {
 		return err
 	}
@@ -147,7 +152,7 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return err
 	}
 
-	return s.post.post(g, inst, done, s.run.staged)
+	return s.post.post(g, inst, done, s.run.staged, spec)
 }
 
 // posts reports whether a task of node's phase runs the instance's last

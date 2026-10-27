@@ -454,6 +454,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// under literal and runtime gates; mrp merges each statically.
 	{name: "empty_fork_gated"},
 	{name: "empty_fork_gated_sub"},
+	// #661: map calls over the return of a sub-pipeline a stage's output
+	// gates, enabled and disabled, the sub-pipeline itself mapping over its
+	// own stage's output.
+	{name: "gated_sub_map"},
 	// #435: splits of a mapped call's whole ref over an invocation-known null
 	// and empty, into a stage and into a sub-pipeline.
 	{name: "empty_fork_wholeref"},
@@ -719,10 +723,8 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "fork_test"},
 	{name: "disable_test"},
 	{name: "retain_test"},
-	// Its comp stage is Martian's Go sum_squares (fixtureBinaries). Martian
-	// runs pipeline.mro with an --overrides file setting SUM_SQUARES's
-	// join.profile, a profiling mode mro2nf does not offer.
-	{name: "split_test_go"},
+	// Its comp stage is Martian's Go sum_squares (fixtureBinaries).
+	{name: "split_test_go", overrides: "overrides.json"},
 	{name: "split_test_go", mro: "disable_pipeline.mro"},
 }
 

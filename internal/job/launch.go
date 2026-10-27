@@ -35,10 +35,11 @@ const (
 	maxAlarmLine     = 1 << 20
 )
 
-// job is one phase job: mrp's shell name for it, its name, its metadata
-// and its resolved resources.
+// job is one phase job: mrp's shell name for it, its node's name and its
+// own, its metadata and its resolved resources.
 type job struct {
 	shell   string
+	node    string
 	name    string
 	dir     string
 	journal string
@@ -47,8 +48,14 @@ type job struct {
 }
 
 // newJob creates the metadata dir sub of the instance's job for shell,
-// named name, with its files and tmp dirs and the journal dir.
-func (r Runtime) newJob(shell, name, sub string) (*job, error) {
+// with its files and tmp dirs and the journal dir: the fork's split or
+// join, or its chunk sub (core/stage.go:98 NewChunk).
+func (r Runtime) newJob(in Instance, shell, sub string) (*job, error) {
+	name := r.forkName(in)
+	if shell == PhaseMain {
+		name += "." + sub
+	}
+
 	work, err := filepath.Abs(r.Work)
 	if err != nil {
 		return nil, fmt.Errorf("resolve work dir: %w", err)
@@ -65,6 +72,7 @@ func (r Runtime) newJob(shell, name, sub string) (*job, error) {
 
 	return &job{
 		shell:   shell,
+		node:    r.fqname(in.Stage.Fqid),
 		name:    name,
 		dir:     dir,
 		journal: filepath.Join(journal, strings.TrimPrefix(name, r.top()+".")),
@@ -112,8 +120,8 @@ func (r Runtime) argv(code Code, j *job) (string, []string) {
 }
 
 // jobInfo is the _jobinfo mrp writes before the job runs
-// (core/node.go:1178-1190): every key the adapters read, with mrp's
-// default profiling and stack-variable modes.
+// (core/node.go:1177-1193): every key the adapters read, with mrp's
+// default stack-variable mode.
 func (r Runtime) jobInfo(j *job) *core.JobInfo {
 	mon := disable
 	if r.Monitor {
@@ -122,18 +130,20 @@ func (r Runtime) jobInfo(j *job) *core.JobInfo {
 
 	version := r.Version
 
-	return &core.JobInfo{
-		Name:        j.name,
-		Type:        jobMode,
-		Threads:     j.res.Threads,
-		MemGB:       j.res.MemGB,
-		VMemGB:      j.res.VMemGB,
-		ProfileMode: core.DisableProfile,
-		Stackvars:   disable,
-		Monitor:     mon,
-		Invocation:  r.Invocation,
-		Version:     &version,
+	info := &core.JobInfo{
+		Name:       j.name,
+		Type:       jobMode,
+		Threads:    j.res.Threads,
+		MemGB:      j.res.MemGB,
+		VMemGB:     j.res.VMemGB,
+		Stackvars:  disable,
+		Monitor:    mon,
+		Invocation: r.Invocation,
+		Version:    &version,
 	}
+	r.profile(j, info)
+
+	return info
 }
 
 // env is the job's environment (core/jobmanager_local.go:515): mre's own,

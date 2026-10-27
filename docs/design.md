@@ -109,8 +109,8 @@ build than the `mro2nf` that transpiled the project
 on the invocation, rebuilds the call as `mrp` does (`core.BuildCallAst`),
 compiles it, checks it against the topology, and vets the file inputs. It
 writes the call every task compiles, a record per node (spec digest, static
-gates, resources under `--mro2nf_overrides`), the entry files, and the forks of
-every entry-fed root.
+gates, resources and profiles under `--mro2nf_overrides`), the entry files,
+and the forks of every entry-fed root.
 
 **Instances.** An instance is one node at one fork, keyed by its ordinal in
 each of its roots ([`internal/cg/record.go`](../internal/cg/record.go)). An
@@ -222,11 +222,12 @@ files and records with `mrp`'s modes.
 
 `go.mod` pins `github.com/martian-lang/martian`. mro2nf calls its compiler,
 types, `core.BuildCallAst`, `ReadOverrides`, `ApplyResourceOverrides`,
-`ValidateOutputs`, `PostProcess` and `NewMetadata`, and builds `mrjob` from it.
-Four parts are copies, each held to the module by a test: the Python adapters
-in `vendor-martian/python` (`TestVendoredMartianMatchesModule`), the retry
-patterns (`TestRetryPatternsMatchModule`), the job-manager settings
-(`TestJobSettingsMatchModule`) and `internal/mrcore` (`TestMrcoreMatchesCore`,
+`GetProfile`, `ValidateOutputs`, `PostProcess` and `NewMetadata`, and builds
+`mrjob` from it. Five parts are copies, each held to the module by a test: the
+Python adapters in `vendor-martian/python` (`TestVendoredMartianMatchesModule`),
+the retry patterns (`TestRetryPatternsMatchModule`), the job-manager settings
+(`TestJobSettingsMatchModule`), its profiles (`TestJobProfilesMatchModule`)
+and `internal/mrcore` (`TestMrcoreMatchesCore`,
 with every adaptation listed in
 [`test/thirdparty/mrcore_test.go`](../test/thirdparty/mrcore_test.go)).
 

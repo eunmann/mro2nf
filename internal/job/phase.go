@@ -16,7 +16,7 @@ import (
 // _args are the bindings alone, and it returns the stage defs the split
 // wrote.
 func (r Runtime) Split(ctx context.Context, in Instance, args core.LazyArgumentMap) (*core.StageDefs, error) {
-	j, err := r.newJob(PhaseSplit, r.forkName(in), PhaseSplit)
+	j, err := r.newJob(in, PhaseSplit, PhaseSplit)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (r Runtime) Split(ctx context.Context, in Instance, args core.LazyArgumentM
 func (r Runtime) Main(ctx context.Context, in Instance, args core.LazyArgumentMap, c Chunk) (json.RawMessage, error) {
 	chunk := ChunkName(c.Index, c.Count)
 
-	j, err := r.newJob(PhaseMain, r.forkName(in)+"."+chunk, chunk)
+	j, err := r.newJob(in, PhaseMain, chunk)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (r Runtime) Join(ctx context.Context, in Instance, args core.LazyArgumentMa
 		return nil, fmt.Errorf("join of %s: %w: %d outs, %d chunks", in.Stage.Fqid, errChunks, len(chunkOuts), len(defs.ChunkDefs))
 	}
 
-	j, err := r.newJob(PhaseJoin, r.forkName(in), PhaseJoin)
+	j, err := r.newJob(in, PhaseJoin, PhaseJoin)
 	if err != nil {
 		return nil, err
 	}

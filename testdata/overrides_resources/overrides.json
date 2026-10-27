@@ -1,24 +1,29 @@
 {
     "": {
         "chunk.threads": 2,
+        "chunk.profile": "line",
         "force_volatile": true
     },
     "OVR": {
         "chunk.mem_gb": 1.5,
+        "chunk.profile": "cpu",
         "force_volatile": false
     },
     "OVR.INNER": {
         "chunk.threads": 1.25,
         "join.threads": 1.5,
         "split.mem_gb": 2.5,
-        "split.vmem_gb": 6
+        "split.vmem_gb": 6,
+        "split.profile": "mem"
     },
     "OVR.INNER.SQUARES": {
         "chunk.mem_gb": 3,
-        "join.vmem_gb": 7
+        "join.vmem_gb": 7,
+        "join.profile": "mem"
     },
     "OVR.INNER.PREP": {
-        "chunk.threads": 0.5
+        "chunk.threads": 0.5,
+        "chunk.profile": "disable"
     },
     "OVR.OTHER": {
         "chunk.threads": 2,
@@ -26,7 +31,8 @@
         "chunk.vmem_gb": 5
     },
     "OVR.EACH": {
-        "chunk.mem_gb": 0.75
+        "chunk.mem_gb": 0.75,
+        "chunk.profile": "no such mode"
     },
     "OVR.NOSUCH": {
         "chunk.threads": 2

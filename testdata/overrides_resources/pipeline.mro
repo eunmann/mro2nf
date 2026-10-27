@@ -3,7 +3,9 @@
 # sub-pipeline, the top-level pipeline, an aliased call and a map call, and
 # the empty key, which mrp's walk never reaches. Every stage reports the
 # threads and memory its job was given (_jobinfo) and the __threads,
-# __mem_gb and __vmem_gb of its _args.
+# __mem_gb and __vmem_gb of its _args. The *.profile keys set each job's
+# profile_mode and profile_config: an adapter mode, mem's environment, an
+# explicit disable, and a mode no profile config names, which mrp passes on.
 stage PREP(
     in  int    n,
     out int[]  xs,
