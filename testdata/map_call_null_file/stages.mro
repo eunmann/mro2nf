@@ -1,0 +1,43 @@
+# The stages the top-level map calls of this fixture's invocations fork.
+# Each writes its file for "file" and leaves it null for "none".
+filetype json;
+
+struct REPORT(
+    json result,
+    int  n,
+)
+
+stage MAKE(
+    in  string v,
+    out json   result,
+    src py     "stages/make",
+)
+
+stage MAKE_REPORT(
+    in  string v,
+    out REPORT report,
+    src py     "stages/report",
+)
+
+stage COUNT(
+    in  string v,
+    out int    n,
+    src py     "stages/count",
+)
+
+pipeline GATED(
+    in  string v,
+    in  bool   off,
+    out json   result,
+)
+{
+    call MAKE(
+        v = self.v,
+    ) using (
+        disabled = self.off,
+    )
+
+    return (
+        result = MAKE.result,
+    )
+}

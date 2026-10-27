@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -63,6 +64,40 @@ func TestFreshRunsAreIdentical(t *testing.T) {
 			t.Errorf("-resume changed the published outputs (-before +after):\n%s", diff)
 		}
 	})
+}
+
+// TestResumeRepublishesEmptyDirs (#664): a -resume into an emptied results/
+// re-executes no task and publishes the tree the first run did from the
+// cached OUTS, the empty outs/<fork key>/ of map_call_null_file's fork that
+// publishes no file included.
+func TestResumeRepublishesEmptyDirs(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "map_call_null_file")
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	first := publishedOutputs(t, proj)
+	if _, ok := first.Tree["a/"]; !ok {
+		t.Fatalf("first run published %v, want the empty a/", first.Tree)
+	}
+
+	if err := os.RemoveAll(filepath.Join(proj, "results")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runNextflow(t, proj, "-resume", "-with-trace", "resume.txt"); err != nil {
+		t.Fatalf("-resume rerun: %v", err)
+	}
+
+	assertAllCached(t, readTrace(t, filepath.Join(proj, "resume.txt")))
+
+	if diff := cmp.Diff(first, publishedOutputs(t, proj)); diff != "" {
+		t.Errorf("-resume published other outputs (-first +resume):\n%s", diff)
+	}
 }
 
 // publishedRun is what a run publishes: the results/ tree by content, and

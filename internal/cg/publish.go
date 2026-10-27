@@ -583,30 +583,14 @@ func (p *pipestance) entries(dir string) ([]published, error) {
 
 		rel := filepath.ToSlash(strings.TrimPrefix(at, p.outs+string(filepath.Separator)))
 
-		src, whole, err := p.source(at, rel, d)
-		if err != nil || src == (placedSource{}) {
-			return err
-		}
-
-		if !whole {
-			e, err := p.publishedAt(rel, src, dir)
-			if err != nil {
-				return err
-			}
-
-			entries = append(entries, e)
-
-			return nil
-		}
-
-		es, err := p.placedEntries(at, rel, src, dir)
+		es, covered, err := p.entriesAt(at, rel, d, dir)
 		if err != nil {
 			return err
 		}
 
 		entries = append(entries, es...)
 
-		if d.IsDir() {
+		if covered && d.IsDir() {
 			return filepath.SkipDir
 		}
 
@@ -617,6 +601,50 @@ func (p *pipestance) entries(dir string) ([]published, error) {
 	}
 
 	return entries, nil
+}
+
+// entriesAt are the entries of the published tree for d at at, rel in
+// outs/, published from below dir, and whether they cover what lies below
+// it, a placed dir's.
+func (p *pipestance) entriesAt(at, rel string, d fs.DirEntry, dir string) ([]published, bool, error) {
+	src, whole, err := p.source(at, rel, d)
+
+	switch {
+	case err != nil:
+		return nil, false, err
+	case src == (placedSource{}):
+		es, err := p.madeDirEntries(at, rel, dir)
+
+		return es, false, err
+	case !whole:
+		e, err := p.publishedAt(rel, src, dir)
+
+		return []published{e}, false, err
+	}
+
+	es, err := p.placedEntries(at, rel, src, dir)
+
+	return es, true, err
+}
+
+// madeDirEntries are the entries of the dir PostProcess made at at, rel in
+// outs/: none when it holds an entry, which is published itself, and else
+// the dir, which PostProcess makes for each fork of a top-level map call
+// whose outs have a file-kind param, whether or not the fork's outs publish
+// a file into it (core/post_process.go processStructOuts).
+func (p *pipestance) madeDirEntries(at, rel, dir string) ([]published, error) {
+	names, err := os.ReadDir(at)
+	if err != nil {
+		return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+	}
+
+	if len(names) > 0 {
+		return nil, nil
+	}
+
+	e, err := p.emptyDirAt(rel, dir)
+
+	return []published{e}, err
 }
 
 // placedEntries are the entries of the placed dir at at, rel in outs/,
@@ -743,8 +771,8 @@ func (p *pipestance) publishedAt(rel string, src placedSource, dir string) (publ
 }
 
 // source is the source of the entry d at at, rel in outs/, and whether it
-// is a placed dir, published whole; none for a dir PostProcess made, whose
-// entries are published each.
+// is a placed dir, published whole; none for a dir PostProcess made
+// (madeDirEntries).
 func (p *pipestance) source(at, rel string, d fs.DirEntry) (placedSource, bool, error) {
 	info, err := os.Stat(at)
 	if err != nil && d.Type()&fs.ModeSymlink != 0 {

@@ -56,6 +56,9 @@ var goldenCases = []goldenCase{
 	{"map_pipe_disabled", "map_pipe_disabled", "expected/outs.json"},
 	{"map_pipe_split", "map_pipe_split", "expected/outs.json"},
 	{"map_file_keyed", "map_file_keyed", "expected/outs.json"},
+	// #664: a fork of a top-level map call that leaves its file null
+	// publishes an empty outs/<fork key>/.
+	{"map_call_null_file", "map_call_null_file", "expected/outs.json"},
 	{"struct_of_file", "struct_of_file", "expected/outs.json"},
 	// #173: pipeline output typed as a callable's output struct with a file leaf.
 	{"callable_struct_file", "callable_struct_file", "expected/outs.json"},

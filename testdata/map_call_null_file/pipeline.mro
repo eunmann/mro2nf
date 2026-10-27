@@ -1,0 +1,15 @@
+# #664: a top-level map call whose outs have a file param, which fork "a"
+# leaves null. mrp's PostProcess makes each fork's outs/<key>/ before it
+# reads the fork's values (core/post_process.go processStructOuts), so it
+# publishes an empty outs/a/ beside outs/b/result.json. The other
+# invocations fork over an array (array.mro), publish a file only inside a
+# struct (struct.mro), disable the stage of one fork (disabled.mro), and
+# publish no file (nofile.mro), for which mrp makes no outs/.
+@include "stages.mro"
+
+map call MAKE(
+    v = split {
+        "a": "none",
+        "b": "file",
+    },
+)

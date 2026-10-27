@@ -1,0 +1,8 @@
+@include "stages.mro"
+
+map call MAKE_REPORT(
+    v = split {
+        "a": "none",
+        "b": "file",
+    },
+)
