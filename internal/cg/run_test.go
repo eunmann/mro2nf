@@ -583,19 +583,23 @@ func TestStandInRunOfEveryFixture(t *testing.T) {
 	}
 	ran := 0
 
-	for _, mro := range entryFiles(t) {
-		fixture := filepath.Base(filepath.Dir(mro))
-		if _, skip := skipped[fixture]; skip {
+	for _, e := range sweepEntries(t) {
+		if _, skip := skipped[e.name]; skip {
 			continue
 		}
 
-		t.Run(fixture+"/"+filepath.Base(mro), func(t *testing.T) {
-			s := newStandIn(t, mro)
+		t.Run(e.label, func(t *testing.T) {
+			g, err := Load(e.mro, "", e.mroPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			s := standInOf(t, g)
 
 			out, n := s.stages()
 			ran += n
 
-			if want, ok := panics[fixture]; ok {
+			if want, ok := panics[e.name]; ok {
 				requirePanic(t, want, func() { _ = s.g.WriteOuts(t.Context(), out) })
 
 				return

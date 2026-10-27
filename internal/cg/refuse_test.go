@@ -85,7 +85,7 @@ func TestGatedSplitTranspilesAsMrp(t *testing.T) {
 							t.Fatalf("mrp instantiates this variant; ReadSource refused it: %v", err)
 						}
 
-						if err := checkCovered(src, dir); err != nil {
+						if err := checkCovered(src, []string{dir}); err != nil {
 							t.Error(err)
 						}
 					})

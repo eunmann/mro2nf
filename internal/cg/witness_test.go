@@ -7,12 +7,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/test/corpus"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// entryFiles lists every fixture invocation: each testdata fixture's
-// pipeline.mro and every bench invocation.
-func entryFiles(t *testing.T) []string {
+// sweepEntry is an invocation the fixture sweeps run.
+type sweepEntry struct {
+	// name keys the sweeps' exemptions: a fixture's directory, or a corpus
+	// entry's name below "corpus/".
+	name    string
+	label   string
+	mro     string
+	mroPath []string
+}
+
+// sweepEntries are every testdata fixture's pipeline.mro and every bench
+// invocation, each compiled with its directory as include path, and every
+// corpus invocation Martian accepts (test/corpus), with its source's.
+func sweepEntries(t *testing.T) []sweepEntry {
 	t.Helper()
 
 	files, err := filepath.Glob(filepath.Join("..", "..", "testdata", "*", "pipeline.mro"))
@@ -25,7 +37,28 @@ func entryFiles(t *testing.T) []string {
 		t.Fatal(err)
 	}
 
-	return append(files, bench...)
+	out := make([]sweepEntry, 0, len(files)+len(bench))
+
+	for _, mro := range append(files, bench...) {
+		dir := filepath.Dir(mro)
+		out = append(out, sweepEntry{name: filepath.Base(dir), label: filepath.Base(dir) + "/" + filepath.Base(mro), mro: mro, mroPath: []string{dir}})
+	}
+
+	srcs, err := corpus.Sources(filepath.Join("..", "..", "testdata", "corpus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := corpus.Load(t.TempDir(), srcs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, e := range corpus.Accepted(entries) {
+		out = append(out, sweepEntry{name: "corpus/" + e.Name, label: "corpus/" + e.Name, mro: e.Mro, mroPath: e.MroPath})
+	}
+
+	return out
 }
 
 // TestWitnessCoversLiteral is the acceptance check of the witness
@@ -35,18 +68,16 @@ func entryFiles(t *testing.T) []string {
 func TestWitnessCoversLiteral(t *testing.T) {
 	checked := 0
 
-	for _, mro := range entryFiles(t) {
-		dir := filepath.Dir(mro)
-
-		src, err := ReadSource(mro, []string{dir})
+	for _, e := range sweepEntries(t) {
+		src, err := ReadSource(e.mro, e.mroPath)
 		if err != nil {
-			t.Errorf("%s: %v", mro, err)
+			t.Errorf("%s: %v", e.label, err)
 
 			continue
 		}
 
-		if err := checkCovered(src, dir); err != nil {
-			t.Errorf("%s: %v", mro, err)
+		if err := checkCovered(src, e.mroPath); err != nil {
+			t.Errorf("%s: %v", e.label, err)
 
 			continue
 		}
@@ -59,13 +90,13 @@ func TestWitnessCoversLiteral(t *testing.T) {
 	}
 }
 
-func checkCovered(src Source, dir string) error {
-	_, wt, err := src.Witness([]string{dir})
+func checkCovered(src Source, mroPaths []string) error {
+	_, wt, err := src.Witness(mroPaths)
 	if err != nil {
 		return err
 	}
 
-	return src.CoversLiteral(wt, []string{dir})
+	return src.CoversLiteral(wt, mroPaths)
 }
 
 // TestCoversLiteralRefuses (#621): a source whose own call's graph a

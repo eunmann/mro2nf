@@ -2,7 +2,6 @@ package cg
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/martian-lang/martian/martian/syntax"
@@ -17,13 +16,13 @@ import (
 func TestSplitCallsAreMartians(t *testing.T) {
 	checked := 0
 
-	for _, mro := range entryFiles(t) {
-		raw, err := os.ReadFile(mro)
+	for _, e := range sweepEntries(t) {
+		raw, err := os.ReadFile(e.mro)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		g, err := Compile(raw, mro, []string{filepath.Dir(mro)})
+		g, err := Compile(raw, e.mro, e.mroPath)
 		if err != nil {
 			continue
 		}
@@ -35,7 +34,7 @@ func TestSplitCallsAreMartians(t *testing.T) {
 
 		for fqid, st := range g.stages {
 			if d := splitCallsDiff(st, rootCalls); d != "" {
-				t.Errorf("%s %s: %s", mro, fqid, d)
+				t.Errorf("%s %s: %s", e.label, fqid, d)
 			}
 		}
 
