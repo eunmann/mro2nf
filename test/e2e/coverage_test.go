@@ -166,8 +166,8 @@ func diffCaseTables(t *testing.T, present map[string]bool) map[string][]string {
 	return tables
 }
 
-// unappliedAllowlistEntries reports each outcome entry not named by exactly
-// one mrpOutcomeCases case (named maps an entry to the cases naming it), each
+// unappliedAllowlistEntries reports each outcome entry named by no
+// mrpOutcomeCases case (named maps an entry to the cases naming it), each
 // ABI-matcher entry scoped to a fixture that is not in mrpDiffCases, where
 // diffStageABI would never apply it or report it stale, and each issue-tracked
 // rule entry scoped to a fixture its comparison never runs.
@@ -180,8 +180,8 @@ func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]st
 	var bad []string
 
 	for _, e := range allow.Entries() {
-		if e.Outcome != nil && len(named[e.ID]) != 1 {
-			bad = append(bad, fmt.Sprintf("outcome divergence %s is named by the mrpOutcomeCases %v; name it from exactly one case", e.ID, named[e.ID]))
+		if e.Outcome != nil && len(named[e.ID]) == 0 {
+			bad = append(bad, fmt.Sprintf("outcome divergence %s is named by no mrpOutcomeCases case; name it from the cases it excuses", e.ID))
 		}
 
 		if e.ABI != nil {

@@ -34,5 +34,7 @@ map_test/                                 test/map_test/
 split_test_go/                            test/split_test_go/; its sum_squares is not
                                           copied but built by the e2e harness from
                                           martian/test/sum_squares in the pinned module
+retry_test/                               test/retry_test/
+retry_map_call_map_test/                  test/retry_map_call_map_test/
 corpus/martian/                           its own SOURCE and LICENSE: each file keeps
                                           its repository path below it

@@ -310,6 +310,14 @@ loads it at launch; PLAN does the type checks.
 another Martian runtime, such as a vendor bundle's. A boolean option alone
 (`--mro2nf_monitor`) means `true`.
 
+Under confinement, an output path that every task sees stays a path, as under
+`mrp`: one under the include path, a stage's code dir, an input read in place
+or the S3 mount. Any other path into the image, such as a library's data dir,
+fails the task where `mrp` keeps it, as mro2nf knows no other part of the
+image. Allowing one would take a profile param listing extra read-only roots,
+which mro2nf does not have; the `standard` and grid profiles copy such a file
+in.
+
 ### job_resources
 
 `params.job_resources`, set in a `-c` config, maps a stage's `special` value to
@@ -383,6 +391,10 @@ twice (`mrp`'s `default_retries`), at the same cpus and memory:
 | 75 | a failure `mrp` retries: an `_errors` line matches a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` (a signal, `ENOMEM`, a scheduler failure) | yes |
 | 104, 130–145 | the executor killed the task or stopped it at a time limit (137: out of memory) | yes |
 | 1 | a stage exception, or a failed `mre` step | no |
+
+A retry of a stage that deleted its file input may fail before the stage
+runs, where `mrp` runs it (divergence `stage-deletes-input`): Martian
+requires stages not to alter their inputs.
 
 `process.maxRetries = N` in a `-c` config is `mrp --autoretry=N`. mro2nf has
 no `--auto-adjust-memory`; this config raises memory on each retry instead:
@@ -499,7 +511,10 @@ A file input is an absolute path or an `s3://` URI. Other schemes need
 | absolute path | read in place | staged | refused, unless under `/mnt/s3` | refused |
 | `s3://` URI | staged | staged | read in place if its bucket is mounted, else staged | staged |
 
-A stage given a path read in place sees that path, as under `mrp`. A stage
+A stage given a path read in place sees that path, as under `mrp`. An output
+naming a file outside the run's work dir by a path the run was not given,
+such as an input's `os.path.realpath`, makes its task look up the real path
+of every input read in place, once. A stage
 given a staged file sees a path in its own task directory with the same name
 and content (divergence `staged-input-paths`). On the local and grid profiles,
 an input that is or holds the run's work directory is refused.
@@ -557,7 +572,7 @@ Settings marked `-c` go in a config passed with `nextflow run -c <file>`.
 | `--profile=MODE` | `--mro2nf_profile <mode>` |
 | `--inspect`, the UI, `mrstat` | the trace file, `-with-report`, `-with-timeline`, `nextflow log` |
 | `mro graph` | `nextflow run main.nf -with-dag dag.html` |
-| `MRO_FORCE_UUID` | the same, in `nextflow run`'s environment; unset, the uuid is the Nextflow session id, which `-resume` keeps |
+| `MRO_FORCE_UUID` | the same, in `nextflow run`'s environment; unset, the uuid is the Nextflow session id, which `-resume` keeps. Fixed for a run: the uuid is an input of every task and the run's identity is its Nextflow session, not a stored uuid, so changing it re-runs every task on `-resume` (`mrp` keeps a pipestance's first uuid) |
 | `--vdrmode`, `--zip`, `--strict`, `--auto-adjust-memory`, `--nopreflight` | none |
 
 ## Troubleshooting

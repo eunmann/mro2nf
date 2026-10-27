@@ -141,7 +141,7 @@ func (v failfileVariant) runNextflow(t *testing.T, proj string) {
 	assertFailfileUsed(t, "mro2nf", dir)
 
 	if v.first.Failed {
-		for _, r := range outcomeRuleReports(mustAllowlist(t), failfileFixture, attempts) {
+		for _, r := range outcomeRuleReports(mustAllowlist(t), failfileFixture, attempts, 0) {
 			t.Error(r)
 		}
 	}

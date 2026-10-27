@@ -981,7 +981,7 @@ func outcomeLegVerdict(env genEnv, leg genLeg, fixture, proj string, mrp runOutc
 	v := outcomeVerdict(leg.name, mrp, nf, detail)
 	v.notes = append(v.notes, fmt.Sprintf("%s: mrp's run: %s; mro2nf's: %s", leg.name, mrp, nf))
 
-	if reports := outcomeRuleReports(env.allow, fixture, attempts); len(reports) > 0 {
+	if reports := outcomeRuleReports(env.allow, fixture, attempts, 0); len(reports) > 0 {
 		v.findings = append(v.findings, genFinding{leg: leg.name, key: "outcome-rules", detail: strings.Join(reports, "\n")})
 	}
 

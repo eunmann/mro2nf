@@ -16,8 +16,8 @@ package e2e
 // either, because mrp records an output-validation failure at the fork while
 // mre records it in the task that ran the phase, and neither is the chunk
 // index (RuleFailureStageAndKind). mro2nf, like mrp, retries only a
-// transient failure (jobmanagers/retry.json), which no failure fixture has,
-// so any task attempted twice fails the comparison.
+// transient failure (jobmanagers/retry.json), so a task retried more often
+// than its case's transient failures fails the comparison.
 //
 // This file carries no build tag so its unit tests run under `make test`;
 // mrpdiff_test.go drives it against live runs.
@@ -309,6 +309,9 @@ func outcomeOf(m divergence.OutcomeMatcher) runOutcome {
 // the Nextflow run is launched with, and mro the invocation mrp runs in
 // place of pipeline.mro, whose literals are those values. monitor launches
 // mrp with --monitor and the Nextflow run with --mro2nf_monitor true.
+// autoretry launches mrp with --autoretry and the Nextflow run with
+// process.maxRetries set to it, the mapping docs/usage.md gives, and
+// retries is how many times the Nextflow run retries one task.
 type mrpOutcomeCase struct {
 	name       string
 	mrp        runOutcome
@@ -317,6 +320,8 @@ type mrpOutcomeCase struct {
 	params     string
 	mro        string
 	monitor    bool
+	autoretry  int
+	retries    int
 }
 
 // errOutcomeCase reports a malformed mrpOutcomeCases entry.
@@ -328,6 +333,10 @@ var errOutcomeCase = errors.New("outcome case")
 func (c mrpOutcomeCase) validate(allow divergence.Allowlist) (*outcomeDivergence, error) {
 	if (c.params == "") != (c.mro == "") {
 		return nil, fmt.Errorf("%w %q: a params file and the invocation of its values go together", errOutcomeCase, c.name)
+	}
+
+	if c.retries > c.autoretry {
+		return nil, fmt.Errorf("%w %q: %d retries under --autoretry=%d", errOutcomeCase, c.name, c.retries, c.autoretry)
 	}
 
 	if c.divergence == "" {
@@ -383,14 +392,16 @@ func (c mrpOutcomeCase) check(d *outcomeDivergence, mrp, nf runOutcome) []string
 
 // outcomeRuleReports reports each outcome comparator rule fixture's run needs
 // that allow has no entry for, each issue-tracked rule entry scoped to
-// fixture that the run does not need, and a retried task. attempts names the
-// task of every attempt in the Nextflow run's trace; a name seen twice is a
-// retried task.
-func outcomeRuleReports(allow divergence.Allowlist, fixture string, attempts []string) []string {
-	bad := outcomeRuleReportsUnder(allow, fixture, attempts)
+// fixture that the run does not need, and a task retried more than retries
+// times. attempts names the task of every attempt in the Nextflow run's
+// trace; a name seen twice is a retried task. mrp retries only a transient
+// failure, and only under --autoretry, so retries is how many transient
+// failures of one task the run has.
+func outcomeRuleReports(allow divergence.Allowlist, fixture string, attempts []string, retries int) []string {
+	bad := outcomeRuleReportsUnder(allow, fixture, attempts, retries)
 
 	for _, e := range allow.ScopedRules(divergence.KindOutcome, fixture) {
-		if slices.Equal(outcomeRuleReportsUnder(allow.Without(e.ID), fixture, attempts), bad) {
+		if slices.Equal(outcomeRuleReportsUnder(allow.Without(e.ID), fixture, attempts, retries), bad) {
 			bad = append(bad, fmt.Sprintf("allowlist entry %s excuses nothing in %s; delete it or narrow its fixtures", e.ID, fixture))
 		}
 	}
@@ -398,7 +409,7 @@ func outcomeRuleReports(allow divergence.Allowlist, fixture string, attempts []s
 	return bad
 }
 
-func outcomeRuleReportsUnder(allow divergence.Allowlist, fixture string, attempts []string) []string {
+func outcomeRuleReportsUnder(allow divergence.Allowlist, fixture string, attempts []string, retries int) []string {
 	var bad []string
 
 	if !allow.Excuses(divergence.RuleFailureStageAndKind, fixture) {
@@ -406,16 +417,17 @@ func outcomeRuleReportsUnder(allow divergence.Allowlist, fixture string, attempt
 			"and no allowlist entry excuses leaving out its message, phase and chunk")
 	}
 
-	if retried := retriedTasks(attempts); len(retried) > 0 {
-		bad = append(bad, fmt.Sprintf("mro2nf attempted %s more than once, where mrp retries only a transient failure, "+
-			"which no failure fixture has", strings.Join(retried, ", ")))
+	if retried := retriedTasks(attempts, retries); len(retried) > 0 {
+		bad = append(bad, fmt.Sprintf("mro2nf retried %s more than %d times, where mrp retries only a transient failure, "+
+			"which the run has %d of", strings.Join(retried, ", "), retries, retries))
 	}
 
 	return bad
 }
 
-// retriedTasks returns, sorted, the task names attempts lists more than once.
-func retriedTasks(attempts []string) []string {
+// retriedTasks returns, sorted, the task names attempts lists more than
+// retries+1 times.
+func retriedTasks(attempts []string, retries int) []string {
 	count := map[string]int{}
 	for _, name := range attempts {
 		count[name]++
@@ -424,7 +436,7 @@ func retriedTasks(attempts []string) []string {
 	var retried []string
 
 	for name, n := range count {
-		if n > 1 {
+		if n > retries+1 {
 			retried = append(retried, name)
 		}
 	}
