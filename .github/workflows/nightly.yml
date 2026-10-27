@@ -196,9 +196,11 @@ jobs:
           path: artifacts/scale/
           if-no-files-found: ignore
 
-  # The corpus sweeps (#653) on the AGPL pipeline repos, fetched at pinned
-  # commits and never committed; every PR runs them on the vendored MIT
-  # corpus. mropath is each repo's MROPATH below its checkout. Supernova's
+  # The corpus sweeps (#653) and stub differential (#654) on the AGPL pipeline
+  # repos, fetched at pinned commits and never committed; every PR runs them
+  # on the vendored MIT corpus. A failed run's logs and a divergence's fixture
+  # are the artifact.
+  # mropath is each repo's MROPATH below its checkout. Supernova's
   # repo sets none for its own pipelines: lib/tada/mro holds includes only it
   # has, and Martian refuses its three pipelines that include the
   # _fastq_prep_new.mro both it and mro hold.
@@ -232,6 +234,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/setup-martian
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -250,6 +253,12 @@ jobs:
       - env:
           MROPATH_IN_REPO: ${{ matrix.mropath }}
         run: make test-corpus CORPUS="$(printf '%s' "$MROPATH_IN_REPO" | tr ':' '\n' | sed "s|^|$RUNNER_TEMP/corpus/|" | paste -sd:)"
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: corpus-run-logs-${{ strategy.job-index }}
+          path: artifacts/e2e/
+          if-no-files-found: ignore
 
   unit:
     name: Nightly unit tests
