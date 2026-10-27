@@ -338,19 +338,32 @@ func TestGenDiffHarnessErrorFails(t *testing.T) {
 }
 
 // TestGenDiffSkipsRefusedShape pins that a program mro2nf refuses as a call
-// graph shape it does not wire is no test, rather than a divergence filed
-// against every refusal the generator reaches.
+// graph shape it does not wire, or for an entry input a keyword names
+// (keyword-input), is no test, rather than a divergence filed against every
+// refusal the generator or the corpus reaches.
 func TestGenDiffSkipsRefusedShape(t *testing.T) {
 	buildBinaries(t)
 
-	dir, work := t.TempDir(), t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), refusedShapeMRO)
+	for name, mro := range map[string]string{"shape": refusedShapeMRO, "keyword_input": keywordInputMRO} {
+		t.Run(name, func(t *testing.T) {
+			dir, work := t.TempDir(), t.TempDir()
+			writeTestFile(t, filepath.Join(dir, "pipeline.mro"), mro)
 
-	errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
-	if skip == "" {
-		t.Errorf("transpileGenLegs = %v, want a skip for the refused shape", errs)
+			errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
+			if skip == "" {
+				t.Errorf("transpileGenLegs = %v, want a skip for the refusal", errs)
+			}
+		})
 	}
 }
+
+// keywordInputMRO calls a stage whose input is named with a Groovy keyword,
+// as Cell Ranger's LOGIC_NOT is.
+const keywordInputMRO = `
+stage NOT(in bool boolean, out bool not, src py "stages/not",)
+
+call NOT(boolean = false,)
+`
 
 // TestGenDiffSkipsPlanRefusal pins planRefusal: a run whose PLAN failed
 // refusing the shape is no test, as a refusal at transpile time is, and a
@@ -805,7 +818,7 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 
 	for i, leg := range env.legs {
 		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg))
-		if err != nil && strings.Contains(err.Error(), cg.ErrShapeUnsupported.Error()) {
+		if err != nil && (strings.Contains(err.Error(), cg.ErrShapeUnsupported.Error()) || strings.Contains(err.Error(), keywordInputRefusal)) {
 			return nil, fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)
 		}
 
