@@ -45,7 +45,9 @@ with Martian's license, in `NOTICE.martian`. A golden has two parts:
   records that issue, and the case fails once the bug is fixed.
 
   Every fixture is in exactly one of `mrpDiffCases`, `mrpOutcomeCases` and
-  `mrpUnrunnable` (with the reason mrp cannot be compared on it). Both suites
+  `mrpUnrunnable` (with the reason mrp cannot be compared on it);
+  `mrpDiffCases` may also run a fixture's other invocations, such as
+  `split_test_go`'s `disable_pipeline.mro`. Both suites
   need a Martian build (`MARTIAN_BIN`, default `~/workdir/martian/bin`);
   `make test-e2e` includes them and CI runs them on every PR.
 

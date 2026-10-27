@@ -1,6 +1,7 @@
 /mro2nf
 /mre
 /mrjob
+/testdata/split_test_go/sum_squares
 /out/
 /.nextflow*
 /work/

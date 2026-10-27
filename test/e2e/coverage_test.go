@@ -71,8 +71,10 @@ var mrpUnrunnable = map[string]string{
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture, testdata's
 // and bench's, is in exactly one of mrpDiffCases (outputs diffed),
 // mrpOutcomeCases (run outcome diffed) and mrpUnrunnable (with a reason), when
-// a table names a fixture that does not exist or a bench case an invocation
-// its fixture lacks, when an mrpOutcomeCases entry is malformed, when an
+// a table names a fixture that does not exist or a case an invocation its
+// fixture lacks, when two mrpDiffCases run one invocation (a fixture's other
+// invocations are cases of its own), when an mrpOutcomeCases entry is
+// malformed, when an
 // allowlist entry is applied by no case (unappliedAllowlistEntries), or when a
 // transpileRefused fixture is not an mrpOutcomeCases entry: every fixture mrp
 // can run faces live mrp.
@@ -133,18 +135,31 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 }
 
 // diffCaseTables maps each fixture an mrpDiffCases case names to the table
-// list TestEveryFixtureMrpDiffed counts, failing a case of a present fixture
-// whose entry invocation does not exist.
+// list TestEveryFixtureMrpDiffed counts, once however many of the fixture's
+// invocations the cases run, failing a case of a present fixture whose entry
+// invocation does not exist and an invocation two cases run.
 func diffCaseTables(t *testing.T, present map[string]bool) map[string][]string {
 	t.Helper()
 
 	tables := map[string][]string{}
+	runs := map[string]bool{}
 
 	for _, tc := range mrpDiffCases {
-		tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
+		dir, mro := tc.source()
+		invocation := filepath.Join(dir, mro)
 
-		if dir, mro := tc.source(); present[tc.name] && !fileExists(filepath.Join(dir, mro)) {
-			t.Errorf("mrpDiffCases runs %s, which does not exist", filepath.Join(dir, mro))
+		if runs[invocation] {
+			t.Errorf("mrpDiffCases runs %s twice; keep one case", invocation)
+		}
+
+		runs[invocation] = true
+
+		if !slices.Contains(tables[tc.name], "mrpDiffCases") {
+			tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
+		}
+
+		if present[tc.name] && !fileExists(invocation) {
+			t.Errorf("mrpDiffCases runs %s, which does not exist", invocation)
 		}
 	}
 

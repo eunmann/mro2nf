@@ -15,6 +15,7 @@ package e2e
 // it (.github/actions/setup-martian).
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -294,11 +296,12 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 // invocation.
 //
 // mro names the entry invocation of a bench/ fixture, whose name is then its
-// repo-relative dir (bench/<shape>); a testdata/ fixture leaves it empty and
-// runs its pipeline.mro. cloud adds a leg run under cloudConfig, each task in
-// its own scratch dir with its inputs copied in, as on an object-store work
-// dir. overrides names an mrp --overrides file in the fixture's dir, which
-// both runs are launched with.
+// repo-relative dir (bench/<shape>), or another invocation of a testdata/
+// fixture than its pipeline.mro, a variant beside the fixture's own case.
+// cloud adds a leg run under cloudConfig, each task in its own scratch dir
+// with its inputs copied in, as on an object-store work dir. overrides names
+// an mrp --overrides file in the fixture's dir, which both runs are launched
+// with.
 type mrpDiffCase struct {
 	name      string
 	mro       string
@@ -306,13 +309,28 @@ type mrpDiffCase struct {
 	overrides string
 }
 
+// benchCase reports whether the case is a bench/ fixture's.
+func (tc mrpDiffCase) benchCase() bool {
+	return strings.HasPrefix(tc.name, "bench/")
+}
+
 // source returns the dir and entry .mro the case runs.
 func (tc mrpDiffCase) source() (string, string) {
-	if tc.mro != "" {
+	if tc.benchCase() {
 		return filepath.Join(root, tc.name), tc.mro
 	}
 
-	return filepath.Join(root, "testdata", tc.name), "pipeline.mro"
+	return filepath.Join(root, "testdata", tc.name), cmp.Or(tc.mro, "pipeline.mro")
+}
+
+// label is the case's subtest name: its fixture, and the invocation of a
+// testdata/ fixture's variant.
+func (tc mrpDiffCase) label() string {
+	if tc.mro == "" || tc.benchCase() {
+		return tc.name
+	}
+
+	return tc.name + "/" + strings.TrimSuffix(tc.mro, ".mro")
 }
 
 // flags are the case's launch flags of mrp and of Nextflow.
@@ -695,6 +713,11 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "fork_test"},
 	{name: "disable_test"},
 	{name: "retain_test"},
+	// Its comp stage is Martian's Go sum_squares (fixtureBinaries). Martian
+	// runs pipeline.mro with an --overrides file setting SUM_SQUARES's
+	// join.profile, a profiling mode mro2nf does not offer.
+	{name: "split_test_go"},
+	{name: "split_test_go", mro: "disable_pipeline.mro"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -778,9 +801,12 @@ func TestMrpDiff(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	bin := martianBin(t)
+	// mrp runs a fixture's built stage code (fixtureBinaries) before the
+	// transpile that would otherwise build it first.
+	buildBinaries(t)
 
 	for _, tc := range mrpDiffCases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.label(), func(t *testing.T) {
 			t.Parallel()
 
 			// Gate before runMrp so one shard runs the fixture's mrp and its
