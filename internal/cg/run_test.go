@@ -571,6 +571,58 @@ func TestWriteOutsOfATopLevelMapCall(t *testing.T) {
 	}
 }
 
+// TestWriteOutsPublishesEmptyForkDirs (#664): mrp's PostProcess makes each
+// fork's outs/<key>/ of a top-level map call whose outs have a file-kind
+// param before it reads the fork's values (core/post_process.go
+// processStructOuts), so a fork that publishes no file publishes its empty
+// dir, over a map and an array, for a file inside a struct and for a
+// disabled stage. Outs with no file-kind param make none. The stand-ins
+// name files no stage wrote, which PostProcess nulls.
+func TestWriteOutsPublishesEmptyForkDirs(t *testing.T) {
+	dir := filepath.Join("..", "..", "testdata", "map_call_null_file")
+	cases := map[string][]string{
+		"pipeline.mro": {"a", "b"},
+		"array.mro":    {"0", "1"},
+		"struct.mro":   {"a", "b"},
+		"disabled.mro": {"a", "b"},
+		"nofile.mro":   nil,
+	}
+
+	for mro, keys := range cases {
+		t.Run(mro, func(t *testing.T) {
+			s := newStandIn(t, filepath.Join(dir, mro))
+
+			out, _ := s.stages()
+			if err := s.g.WriteOuts(t.Context(), out); err != nil {
+				t.Fatalf("pipeline outs: %v", err)
+			}
+
+			manifest := make([]published, 0, len(keys))
+			tree := map[string]string{}
+
+			for i, k := range keys {
+				manifest = append(manifest, published{Path: k, Source: fmt.Sprintf("external/%d/%s", i+1, k), Local: true, Dir: true})
+				tree[k+"/"] = ""
+			}
+
+			if d := cmp.Diff(manifest, readManifest(t, out.Manifest)); d != "" {
+				t.Errorf("published tree's entries (-want +got):\n%s", d)
+			}
+
+			results := filepath.Join(s.dir, "results")
+			if err := os.MkdirAll(results, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			publishManifest(t, out.Manifest, results, func(src string) string { return src })
+
+			if d := cmp.Diff(tree, publishedFiles(t, results)); d != "" {
+				t.Errorf("published tree (-mrp +got):\n%s", d)
+			}
+		})
+	}
+}
+
 // TestStandInRunOfEveryFixture runs every fixture's call graph end to end
 // on stand-in outs: every instance's _args resolve from what its task
 // stages, every enabled one posts its outs and fork elements, and the
