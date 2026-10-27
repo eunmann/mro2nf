@@ -221,6 +221,9 @@ class Maker(object):
             return self.directory(preset)
         if is_file(base):
             return self.file(base, preset)
+        if base == "map":
+            # Martian's untyped map holds any object.
+            return {self.r.pick(KEYS): self.r.pick(STRINGS + INTS) for _ in range(self.r.below(3))}
         return {name: self.value(ptype(ft)) for name, ft in STRUCTS[base]}
 
 

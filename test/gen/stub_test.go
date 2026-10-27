@@ -242,6 +242,27 @@ func setSpecSeed(t *testing.T, stageDir string, seed uint64) {
 	}
 }
 
+// TestStubDrawsUntypedMaps checks the stub draws a value of Martian's
+// untyped map, which a corpus stage may declare and no generated one does:
+// an object, alone or in an array.
+func TestStubDrawsUntypedMaps(t *testing.T) {
+	p := stubProgram()
+	p.Stages[0].Split = false
+	p.Stages[0].Out = []Param{{Name: "m", Type: Type{Base: "map"}}, {Name: "ms", Type: Type{Base: "map", Arr: 1}}}
+	r := newStubRunner(t, p)
+
+	for i := range 20 {
+		out, _ := r.run("main", map[string]any{"i0": nil, "i1": []any{float64(i)}})
+
+		var o struct {
+			M  *map[string]any  `json:"m"`
+			Ms []map[string]any `json:"ms"`
+		}
+
+		decodeInto(t, out, &o)
+	}
+}
+
 // TestStubOutputsConform checks the stub's outputs and chunk definitions have
 // the declared types, as mrp's output validation requires.
 func TestStubOutputsConform(t *testing.T) {
