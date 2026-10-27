@@ -15,6 +15,7 @@ package e2e
 // it (.github/actions/setup-martian).
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -115,7 +117,7 @@ func execMrp(ctx context.Context, bin, dir, mro, tmp string, extra ...string) ([
 	// disable keeps intermediate stage files, which the stage-ABI diff hashes
 	// through the paths in each invocation's _args/_outs; mrp's default rolling
 	// VDR deletes them once their consumers finish.
-	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable", extra...)
+	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable", nil, extra...)
 }
 
 // The pool mrp's local job manager grants the differential's jobs from, its
@@ -141,8 +143,9 @@ func mrpPoolArgs(t *testing.T, proj string) []string {
 	return []string{"-c", path}
 }
 
-// execMrpVDR is execMrp under the given --vdrmode.
-func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, extra ...string) ([]byte, error) {
+// execMrpVDR is execMrp under the given --vdrmode, with env added to mrp's
+// environment, which its jobs inherit.
+func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, env []string, extra ...string) ([]byte, error) {
 	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
 	// invocations pair up.
 	cmd := exec.CommandContext(ctx, filepath.Join(bin, "mrp"), slices.Concat([]string{
@@ -151,7 +154,7 @@ func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, extra .
 		"--disable-ui", "--vdrmode=" + vdrMode,
 	}, extra)...)
 	cmd.Dir = tmp
-	cmd.Env = append(os.Environ(), "MROPATH="+dir)
+	cmd.Env = slices.Concat(os.Environ(), []string{"MROPATH=" + dir}, env)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 30 * time.Second
 
@@ -294,11 +297,12 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 // invocation.
 //
 // mro names the entry invocation of a bench/ fixture, whose name is then its
-// repo-relative dir (bench/<shape>); a testdata/ fixture leaves it empty and
-// runs its pipeline.mro. cloud adds a leg run under cloudConfig, each task in
-// its own scratch dir with its inputs copied in, as on an object-store work
-// dir. overrides names an mrp --overrides file in the fixture's dir, which
-// both runs are launched with.
+// repo-relative dir (bench/<shape>), or another invocation of a testdata/
+// fixture than its pipeline.mro, a variant beside the fixture's own case.
+// cloud adds a leg run under cloudConfig, each task in its own scratch dir
+// with its inputs copied in, as on an object-store work dir. overrides names
+// an mrp --overrides file in the fixture's dir, which both runs are launched
+// with.
 type mrpDiffCase struct {
 	name      string
 	mro       string
@@ -306,13 +310,28 @@ type mrpDiffCase struct {
 	overrides string
 }
 
+// benchCase reports whether the case is a bench/ fixture's.
+func (tc mrpDiffCase) benchCase() bool {
+	return strings.HasPrefix(tc.name, "bench/")
+}
+
 // source returns the dir and entry .mro the case runs.
 func (tc mrpDiffCase) source() (string, string) {
-	if tc.mro != "" {
+	if tc.benchCase() {
 		return filepath.Join(root, tc.name), tc.mro
 	}
 
-	return filepath.Join(root, "testdata", tc.name), "pipeline.mro"
+	return filepath.Join(root, "testdata", tc.name), cmp.Or(tc.mro, "pipeline.mro")
+}
+
+// label is the case's subtest name: its fixture, and the invocation of a
+// testdata/ fixture's variant.
+func (tc mrpDiffCase) label() string {
+	if tc.mro == "" || tc.benchCase() {
+		return tc.name
+	}
+
+	return tc.name + "/" + strings.TrimSuffix(tc.mro, ".mro")
 }
 
 // flags are the case's launch flags of mrp and of Nextflow.
@@ -691,6 +710,20 @@ var mrpDiffCases = []mrpDiffCase{
 	// keys scoped to a stage, a sub-pipeline, the top-level pipeline, an
 	// aliased call and a map call, over a split's chunk and join requests.
 	{name: "overrides_resources", overrides: "overrides.json"},
+	// Martian's own integration tests (testdata/NOTICE.martian), each run as
+	// its run_test.sh runs it. disable_test's one-core, 1 GB pool there
+	// bounds only how many jobs run at once. retain_test's --vdrmode=strict
+	// is TestMrpDiffVDR's.
+	{name: "files_test"},
+	{name: "struct_test"},
+	{name: "fork_test"},
+	{name: "disable_test"},
+	{name: "retain_test"},
+	// Its comp stage is Martian's Go sum_squares (fixtureBinaries). Martian
+	// runs pipeline.mro with an --overrides file setting SUM_SQUARES's
+	// join.profile, a profiling mode mro2nf does not offer.
+	{name: "split_test_go"},
+	{name: "split_test_go", mro: "disable_pipeline.mro"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -758,6 +791,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// #585: an entry input named with a Groovy keyword. mrp runs it; mro2nf
 	// refuses the transpile (transpileRefused).
 	{name: "keyword_input", mrp: runOutcome{}, divergence: "keyword-input"},
+	// Martian's exit_test: EXIT asserts.
+	{name: "exit_test", mrp: failedIn(failAssert, "EXIT")},
+	// Martian's monitor_test: under --monitor, mrjob kills EXCEED_RESERVATION
+	// over its 0.01 GB request.
+	{name: "monitor_test", mrp: failedIn(failError, "EXCEED_RESERVATION"), monitor: true},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -769,9 +807,12 @@ func TestMrpDiff(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	bin := martianBin(t)
+	// mrp runs a fixture's built stage code (fixtureBinaries) before the
+	// transpile that would otherwise build it first.
+	buildBinaries(t)
 
 	for _, tc := range mrpDiffCases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.label(), func(t *testing.T) {
 			t.Parallel()
 
 			// Gate before runMrp so one shard runs the fixture's mrp and its
@@ -1028,6 +1069,11 @@ func (c mrpOutcomeCase) flags(dir string) ([]string, []string) {
 		nfFlags = append(nfFlags, "-params-file", filepath.Join(dir, c.params))
 	}
 
+	if c.monitor {
+		mrpFlags = append(mrpFlags, "--monitor")
+		nfFlags = append(nfFlags, "--mro2nf_monitor", "true")
+	}
+
 	return mrpFlags, nfFlags
 }
 
@@ -1075,6 +1121,13 @@ func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []
 // flags, and classifies the run.
 func mrpOutcome(ctx context.Context, bin, dir, mro, tmp string, extra ...string) (runOutcome, error) {
 	_, err := execMrp(ctx, bin, dir, mro, tmp, extra...)
+
+	return mrpRunEnded(err, tmp)
+}
+
+// mrpRunEnded classifies the mrp run in tmp that ended with err. Only mrp's
+// non-zero exit is a failed run; any other error is returned.
+func mrpRunEnded(err error, tmp string) (runOutcome, error) {
 	if err == nil {
 		return runOutcome{}, nil
 	}
