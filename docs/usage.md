@@ -310,6 +310,14 @@ loads it at launch; PLAN does the type checks.
 another Martian runtime, such as a vendor bundle's. A boolean option alone
 (`--mro2nf_monitor`) means `true`.
 
+Under confinement, an output path that every task sees stays a path, as under
+`mrp`: one under the include path, a stage's code dir, an input read in place
+or the S3 mount. Any other path into the image, such as a library's data dir,
+fails the task where `mrp` keeps it, as mro2nf knows no other part of the
+image. Allowing one would take a profile param listing extra read-only roots,
+which mro2nf does not have; the `standard` and grid profiles copy such a file
+in.
+
 ### job_resources
 
 `params.job_resources`, set in a `-c` config, maps a stage's `special` value to
