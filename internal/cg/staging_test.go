@@ -20,8 +20,8 @@ func standInSkipped() map[string]string {
 			"(map filtering an array); its literal is TestMrpDiff's",
 	}
 
-	const gatedPost = "mro2nf defect, where mrp runs it: the post of a stage in a sub-pipeline a stage's output " +
-		"disables panics computing the elements of a map call it feeds (disabled binding ... was not ready)"
+	const gatedPost = "#661: the post of a stage in a sub-pipeline a stage's output disables panics computing " +
+		"the elements of a map call it feeds (disabled binding ... was not ready), where mrp runs it"
 
 	for _, mro := range []string{
 		"", "_array_of_maps", "_array_on", "_map_of_arrays", "_mapped_parent", "_mapped_parent_keys", "_mapped_parent_multi", "_on",
