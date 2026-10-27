@@ -1,0 +1,8 @@
+@include "stages.mro"
+
+map call COUNT(
+    v = split {
+        "a": "none",
+        "b": "file",
+    },
+)

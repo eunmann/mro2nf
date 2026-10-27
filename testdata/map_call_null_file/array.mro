@@ -1,0 +1,8 @@
+@include "stages.mro"
+
+map call MAKE(
+    v = split [
+        "none",
+        "file",
+    ],
+)

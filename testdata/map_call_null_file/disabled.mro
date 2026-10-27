@@ -1,0 +1,12 @@
+@include "stages.mro"
+
+map call GATED(
+    v   = split {
+        "a": "file",
+        "b": "file",
+    },
+    off = split {
+        "a": true,
+        "b": false,
+    },
+)

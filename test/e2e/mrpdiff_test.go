@@ -715,6 +715,15 @@ var mrpDiffCases = []mrpDiffCase{
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.
 	{name: "map_call_entry"},
+	// #664: a top-level map call's fork whose outs leave every file null
+	// publishes an empty outs/<fork key>/, over a map and an array, for a
+	// file inside a struct and for a disabled stage; with no file-kind
+	// output, no outs/.
+	{name: "map_call_null_file"},
+	{name: "map_call_null_file", mro: "array.mro"},
+	{name: "map_call_null_file", mro: "struct.mro"},
+	{name: "map_call_null_file", mro: "disabled.mro"},
+	{name: "map_call_null_file", mro: "nofile.mro"},
 	// #301: mrp's --overrides file at launch resizes each job as mrp does, by
 	// keys scoped to a stage, a sub-pipeline, the top-level pipeline, an
 	// aliased call and a map call, over a split's chunk and join requests.
