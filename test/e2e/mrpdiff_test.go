@@ -378,6 +378,8 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "marker_strings"},
 	// #284: every file a stage receives keeps the basename mrp passes it.
 	{name: "basename_echo"},
+	// #665: relative path literals reach the stage as written, unstaged.
+	{name: "rel_path_literal"},
 	// #543: a stage opening a companion file beside its entry file input
 	// finds it, as under mrp: every task reads a head-node path in place.
 	{name: "entry_file_sibling"},

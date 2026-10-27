@@ -394,11 +394,13 @@ type leafMarker struct {
 
 // mark copies the file leaf to its own ordinal dir and returns its marker, or
 // the marker of its reference (reference), or returns leaf unchanged when it
-// names no file or lies under a root, where every task reads it, so neither
-// its tree is walked nor its origin recorded.
+// is relative, names no file or lies under a root, where every task reads it,
+// so neither its tree is walked nor its origin recorded. mrp passes a
+// relative path as written, and each job resolves it against its own dir
+// (#665).
 func (m leafMarker) mark(leaf string) (string, error) {
 	src := strings.TrimPrefix(leaf, escapePrefix)
-	if src == "" {
+	if !filepath.IsAbs(src) {
 		return leaf, nil
 	}
 
