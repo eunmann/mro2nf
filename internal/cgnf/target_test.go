@@ -406,7 +406,7 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 
 	const want = `{
   "mro2nf_overrides": {
-    "description": "an s3:// URI of mrp's --overrides file, over each stage's resources",
+    "description": "an s3:// URI of mrp's --overrides file, over each stage's resources and profiles",
     "optional": true
   },
   "reads": {

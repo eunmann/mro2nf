@@ -92,9 +92,12 @@ type cgReplay struct {
 	entry   string
 	// adapters is mrp's adapters dir, which `mre stage` runs py stages with.
 	adapters string
-	// overrides is the mrp --overrides file mrp ran with, which every job
-	// runs with too.
+	// overrides is the mrp --overrides file mrp ran with, which `mre plan`
+	// reads.
 	overrides string
+	// nodeOverrides maps each node to its own overrides file, which `mre
+	// plan` wrote and its every task runs with, as the project's do.
+	nodeOverrides map[string]string
 	// pipelines is the pipelines' version `mre plan` found, which every
 	// job's _jobinfo records.
 	pipelines string
@@ -798,7 +801,7 @@ func (rp *cgReplay) records(file string) []string {
 // every other key (cwd, host, pid, rusage, ...) varies per run, so only its
 // presence is compared.
 var jobInfoStable = []string{
-	"name", "type", "threads", "memGB", "vmemGB", "profile_mode",
+	"name", "type", "threads", "memGB", "vmemGB", "profile_mode", "profile_config",
 	"stackvars_flag", "monitor_flag", "invocation", "version",
 }
 
@@ -898,8 +901,8 @@ func (rp *cgReplay) stage(phase, jw string, argv ...string) bool {
 		"-local-cores", strconv.Itoa(mrpLocalCores), "-local-mem-gb", strconv.Itoa(mrpLocalMemGB), "-host-in-place",
 		"-pipelines-version", rp.pipelines,
 	}
-	if rp.overrides != "" {
-		base = append(base, "-overrides", rp.overrides)
+	if node := slices.Index(argv, "-node"); node >= 0 && rp.nodeOverrides[argv[node+1]] != "" {
+		base = append(base, "-overrides", rp.nodeOverrides[argv[node+1]])
 	}
 
 	stderr, err := rp.mre(slices.Concat(base, argv)...)
@@ -944,12 +947,43 @@ func (rp *cgReplay) plan() string {
 		rp.t.Fatalf("%v\n%s", err, stderr)
 	}
 
+	rp.readNodeOverrides(work)
+
 	v, err := os.ReadFile(filepath.Join(work, "pipelines"))
 	if err != nil {
 		rp.t.Fatal(err)
 	}
 
 	return string(v)
+}
+
+// readNodeOverrides writes each node's own overrides from the nodes file
+// `mre plan` wrote in work, field 6 of its line split on spaces as the
+// driver splits it, as the node's tasks write theirs.
+func (rp *cgReplay) readNodeOverrides(work string) {
+	rp.nodeOverrides = map[string]string{}
+
+	nodes, err := os.ReadFile(filepath.Join(work, "nodes"))
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	// A pipeline of no stage calls (returnonly) plans no nodes.
+	text := strings.TrimSpace(string(nodes))
+	if text == "" {
+		return
+	}
+
+	for line := range strings.SplitSeq(text, "\n") {
+		f := strings.Split(line, " ")
+		if len(f) != 8 {
+			rp.t.Fatalf("nodes line %q: want fqid, digest, off, disabled keys, cpus, memory, overrides and collapsed roots", line)
+		}
+
+		if f[6] != "-" {
+			rp.nodeOverrides[f[0]] = writeTestFile(rp.t, filepath.Join(work, "overrides", f[0]+".json"), f[6])
+		}
+	}
 }
 
 // mreBuild is the build of the repo's mre, which `mre plan` requires of

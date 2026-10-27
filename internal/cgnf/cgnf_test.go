@@ -189,6 +189,31 @@ func TestEmitConfinesAtLaunch(t *testing.T) {
 	}
 }
 
+// TestEmitProfilesAtLaunch: params.mro2nf_profile, mrp's --profile, is
+// unset by default, and when set reaches PLAN, which refuses a mode no
+// profile names, and every stage task's mre stage -profile, each through
+// its meta's run entry, which keys its -resume.
+func TestEmitProfilesAtLaunch(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "file_min"))
+
+	if cfg := tree["conf/base.config"]; !strings.Contains(cfg, "params.mro2nf_profile = null\n") {
+		t.Errorf("conf/base.config does not leave the profile unset:\n%s", cfg)
+	}
+
+	for _, want := range []string{
+		"${meta.run.profile ? ' -profile ' + shq(meta.run.profile) : ''}", "profile: params.mro2nf_profile, host_inputs:",
+		"profile: params.mro2nf_profile, confine:",
+	} {
+		if !strings.Contains(tree["main.nf"], want) {
+			t.Errorf("main.nf lacks %q", want)
+		}
+	}
+
+	if !strings.Contains(stageModule, "if (run.profile) {\n        cmd += \" -profile ${shq(run.profile)}\"") {
+		t.Error("stage.nf does not pass params.mro2nf_profile to mre stage")
+	}
+}
+
 // TestEmitAliases: every stage node of the witness's call graph is one
 // alias of the stage module, a split stage the split, main and join
 // processes, and every entry-fed fork root takes its forks from PLAN's one

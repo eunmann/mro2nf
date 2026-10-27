@@ -218,6 +218,9 @@ def mreStage(task, Map meta, phase, rest) {
     if (run.monitor) {
         cmd += ' -monitor'
     }
+    if (run.profile) {
+        cmd += " -profile ${shq(run.profile)}"
+    }
     if (run.confine) {
         cmd += ' -confine'
     }

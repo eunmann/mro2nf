@@ -51,7 +51,7 @@ const planProcess = `process PLAN {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(meta.run.mre)} plan -build ${shq(meta.build)} ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files -code-mropath ${shq(meta.mropath)} -pipelines pipelines
+    ${shq(meta.run.mre)} plan -build ${shq(meta.build)} ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)}${meta.run.profile ? ' -profile ' + shq(meta.run.profile) : ''} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files -code-mropath ${shq(meta.mropath)} -pipelines pipelines
     """
 }
 

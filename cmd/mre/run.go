@@ -70,11 +70,12 @@ func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.rt.Adapters, "adapters", "", "Martian's adapters dir (default: the adapters mre embeds)")
 	fs.StringVar(&f.rt.Mrjob, "mrjob", "", "the mrjob binary py and comp stages run under (default: the mrjob beside mre)")
 	fs.BoolVar(&f.rt.Monitor, "monitor", false, "mrp --monitor: mrjob enforces the job's memory and thread limits")
+	fs.StringVar((*string)(&f.rt.Profile), "profile", "", "mrp --profile: the profile mode of a job no overrides key sets one for (default: disable)")
 	fs.StringVar(&f.rt.PSID, "psid", "", "the pipestance id job names carry")
 	fs.StringVar(&f.rt.UUID, "uuid", "", "the run's pipestance uuid, which every job's environment holds as MRO_UUID")
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
 	fs.BoolVar(&f.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
-	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources (mre plan writes each node's own)")
+	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources and profile (mre plan writes each node's own)")
 	fs.StringVar(&f.pipelines, "pipelines-version", "", "the pipelines' version the job's _jobinfo records, which mre plan found for the run (-pipelines)")
 	definePool(fs, &f.rt.Local)
 }

@@ -54,8 +54,11 @@ type Runtime struct {
 	Mrjob string
 	// Monitor is mrp's --monitor, which mrjob enforces from _jobinfo.
 	Monitor bool
-	// Overrides is mrp's --overrides, over every job's resources; nil
-	// overrides none.
+	// Profile is mrp's --profile, the profile mode of every job no
+	// overrides key sets one for; empty is mrp's default, disable.
+	Profile core.ProfileMode
+	// Overrides is mrp's --overrides, over every job's resources and
+	// profile; nil overrides none.
 	Overrides *core.PipestanceOverrides
 	// Local is the pool mrp's local job manager grants every job from; the
 	// zero Pool grants them as mrp's cluster job managers do.

@@ -54,7 +54,7 @@ silently: it fails the transpile or the run's PLAN, before any stage starts.
 | `martian` Python API | Supported | the real adapter runs |
 | `martian.alarm` | Supported | written to the task's stderr; no run-level summary |
 | output validation, `ASSERT` vs retryable errors | Supported | exit 42 is never retried, 75 is |
-| `--overrides`, `--monitor` | Supported | `--mro2nf_overrides`, `--mro2nf_monitor` |
+| `--overrides`, `--monitor`, `--profile` | Supported | `--mro2nf_overrides` (resources and `*.profile`), `--mro2nf_monitor`, `--mro2nf_profile`; PLAN refuses a mode no profile names, as `mrp` does |
 | `--auto-adjust-memory`, `--strict` | Not supported | a `-c` config can raise memory per retry |
 
 ## Files and outputs
@@ -75,6 +75,6 @@ silently: it fails the transpile or the run's PLAN, before any stage starts.
 | local and grid jobmodes | Supported | `standard`, `slurm`, `sge`, `lsf`, `pbs` profiles |
 | restart | Differs | Nextflow's `-resume` caches by content (`resume-content-cache`) |
 | `--maxjobs`, `--jobinterval`, `--localcores`, `--localmem` | Supported | in a `-c` config ([`mrp` equivalents](usage.md#mrp-equivalents)) |
-| `--profile`, `--inspect`, web UI, `mrstat`, `mro graph` | Out of scope | Nextflow's trace, reports, `nextflow log`, `-with-dag` |
+| `--inspect`, web UI, `mrstat`, `mro graph` | Out of scope | Nextflow's trace, reports, `nextflow log`, `-with-dag` |
 | `--onfinish` | Out of scope | a `workflow.onComplete` handler |
 | VDR | Out of scope | no mid-run deletion |
