@@ -1,0 +1,12 @@
+stage EXCEED_RESERVATION(
+    in  string msg,
+    out string msg,
+    src py     "exceed_reservation",
+) using (
+    mem_gb  = 0.01,
+    vmem_gb = 4,
+)
+
+call EXCEED_RESERVATION(
+    msg = "you're gonna die",
+)

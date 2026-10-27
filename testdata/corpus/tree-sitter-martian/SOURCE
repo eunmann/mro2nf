@@ -1,0 +1,8 @@
+Repository: https://github.com/LoganAMorrison/tree-sitter-martian
+Commit:     a113d7785e0e32d52d6eb198d54806299d780c97
+License:    MIT, in LICENSE, copied from the repository root
+Paths:      each file's path below this directory is its path in the repository
+
+The one .mro file of test/highlight that Martian compiles; the others are
+highlighting samples that include files the repository does not hold or do
+not parse.

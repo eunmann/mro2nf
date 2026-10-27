@@ -2,11 +2,11 @@ package types_test
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/eunmann/mro2nf/test/corpus"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -64,48 +64,56 @@ func TestParams(t *testing.T) {
 	}
 }
 
-// TestCorpusParamsResolve is a robustness sweep over rich, real Martian MRO
-// files (structs, typed maps, map calls over arrays and maps, projection,
-// wildcards, duck typing, disabled): every parameter of every callable, in
-// every role, and every struct member resolves in the type table the file
-// compiles to.
+// TestCorpusParamsResolve is a robustness sweep over the vendored corpus of
+// real Martian MRO files (structs, typed maps, map calls over arrays and
+// maps, projection, wildcards, duck typing, disabled): every parameter of
+// every callable, in every role, and every struct member resolves in the
+// type table each file compiles to.
 func TestCorpusParamsResolve(t *testing.T) {
-	dir := filepath.Join("..", "..", "testdata", "corpus")
-
-	entries, err := os.ReadDir(dir)
+	srcs, err := corpus.Vendored(filepath.Join("..", "..", "testdata", "corpus"))
 	if err != nil {
-		t.Fatalf("read corpus dir: %v", err)
+		t.Fatal(err)
 	}
 
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".mro" {
-			continue
+	for _, src := range srcs {
+		files, err := corpus.Files(src.Roots)
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		t.Run(entry.Name(), func(t *testing.T) {
-			_, _, ast, err := syntax.Compile(filepath.Join(dir, entry.Name()), []string{dir}, false)
-			if err != nil {
-				t.Fatalf("compile: %v", err)
-			}
+		for _, f := range files {
+			rel, _ := filepath.Rel(src.Roots[0], f)
+			t.Run(src.Name+"/"+rel, func(t *testing.T) { checkFileParamsResolve(t, f, src.Roots) })
+		}
+	}
+}
 
-			if len(ast.Callables.List)+len(ast.StructTypes) == 0 {
-				t.Fatal("no callables or structs")
-			}
+// checkFileParamsResolve compiles the .mro file at path and resolves every
+// parameter of its callables and every member of its structs.
+func checkFileParamsResolve(t *testing.T, path string, mroPaths []string) {
+	t.Helper()
 
-			tbl := types.NewTable(&ast.TypeTable)
+	_, _, ast, err := syntax.Compile(path, mroPaths, false)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
 
-			for _, c := range ast.Callables.List {
-				checkParamsResolve(t, tbl, c)
-			}
+	if len(ast.Callables.List)+len(ast.StructTypes) == 0 {
+		t.Fatal("no callables or structs")
+	}
 
-			for _, st := range ast.StructTypes {
-				for _, m := range st.Members {
-					if _, err := tbl.Type(m.Tname); err != nil {
-						t.Errorf("struct %s member %s: %v", st.Id, m.Id, err)
-					}
-				}
+	tbl := types.NewTable(&ast.TypeTable)
+
+	for _, c := range ast.Callables.List {
+		checkParamsResolve(t, tbl, c)
+	}
+
+	for _, st := range ast.StructTypes {
+		for _, m := range st.Members {
+			if _, err := tbl.Type(m.Tname); err != nil {
+				t.Errorf("struct %s member %s: %v", st.Id, m.Id, err)
 			}
-		})
+		}
 	}
 }
 

@@ -1,0 +1,9 @@
+Repository: https://github.com/martian-lang/martian
+Commit:     50ad6c054d307cb6cacb9082425c38c996f216e1
+License:    MIT, in LICENSE, copied from the repository root
+Paths:      each file's path below this directory is its path in the repository
+
+The .mro files of martian/syntax/testdata, martian/core/testdata and test/
+that Martian compiles. The ones Martian's own tests require to fail to
+compile (format templates, include cycles, missing includes and types) and
+the declaration-free empty.mro are left out.
