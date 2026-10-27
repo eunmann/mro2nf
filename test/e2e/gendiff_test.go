@@ -55,6 +55,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -229,6 +230,48 @@ func TestGenBudgetSpent(t *testing.T) {
 	}
 }
 
+// TestStageTasksVerdict pins the stage-task gate on a fake run: the tasks
+// of the stage module's aliases count, each once however many attempts it
+// took, plumbing tasks do not, and a count unequal to mrp's jobs is a
+// finding.
+func TestStageTasksVerdict(t *testing.T) {
+	proj, ps := t.TempDir(), t.TempDir()
+	writeTestFile(t, filepath.Join(proj, "main.nf"), "include { STAGE as N0_A; STAGE_SPLIT as N1_B_SP } from './modules/stage.nf'\n")
+	writeTestFile(t, filepath.Join(proj, "subworkflows", "P.nf"), "include { STAGE_MAIN as N1_B_MN } from '../modules/stage.nf'\n")
+	writeTestFile(t, filepath.Join(proj, "trace.txt"), "hash\tname\tstatus\texit\n"+
+		"aa/01\tPLAN\tCOMPLETED\t0\n"+
+		"aa/02\tP:N0_A (1)\tFAILED\t1\n"+
+		"aa/03\tP:N0_A (1)\tCOMPLETED\t0\n"+
+		"aa/04\tP:N1_B_SP (1)\tCOMPLETED\t0\n"+
+		"aa/05\tP:SUB:N1_B_MN (1)\tCOMPLETED\t0\n"+
+		"aa/06\tP:SUB:N1_B_MN (2)\tCOMPLETED\t0\n"+
+		"aa/07\tP:GATHER (1)\tCOMPLETED\t0\n")
+
+	for i := range 4 {
+		writeTestFile(t, filepath.Join(ps, "P", "fork0", fmt.Sprintf("chnk%d", i), "_jobinfo"), "{}")
+	}
+
+	v, err := stageTasksVerdict("default", ps, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff([]string{"default: 4 stage tasks, mrp ran 4 jobs"}, v.notes); d != "" || len(v.findings) > 0 {
+		t.Errorf("4 tasks, 4 jobs: findings %v, notes (-want +got):\n%s", v.findings, d)
+	}
+
+	writeTestFile(t, filepath.Join(ps, "P", "fork0", "join", "_jobinfo"), "{}")
+
+	v, err = stageTasksVerdict("default", ps, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if keys := findingKeys(v.findings); keys != "tasks" {
+		t.Errorf("4 tasks, 5 jobs: findings %v, want one tasks finding", v.findings)
+	}
+}
+
 // TestGenFindingsRecordDivergences pins GEN_FINDINGS's half of the exit
 // split: a divergence leaves the test passing, and every diverging seed is
 // one whole line of the file even when many diverge at once.
@@ -295,17 +338,63 @@ func TestGenDiffHarnessErrorFails(t *testing.T) {
 }
 
 // TestGenDiffSkipsRefusedShape pins that a program mro2nf refuses as a call
-// graph shape it does not wire is no test, rather than a divergence filed
-// against every refusal the generator reaches.
+// graph shape it does not wire, or for an entry input a keyword names
+// (keyword-input), is no test, rather than a divergence filed against every
+// refusal the generator or the corpus reaches.
 func TestGenDiffSkipsRefusedShape(t *testing.T) {
 	buildBinaries(t)
 
-	dir, work := t.TempDir(), t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), refusedShapeMRO)
+	for name, mro := range map[string]string{"shape": refusedShapeMRO, "keyword_input": keywordInputMRO} {
+		t.Run(name, func(t *testing.T) {
+			dir, work := t.TempDir(), t.TempDir()
+			writeTestFile(t, filepath.Join(dir, "pipeline.mro"), mro)
 
-	errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
-	if skip == "" {
-		t.Errorf("transpileGenLegs = %v, want a skip for the refused shape", errs)
+			errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
+			if skip == "" {
+				t.Errorf("transpileGenLegs = %v, want a skip for the refusal", errs)
+			}
+		})
+	}
+}
+
+// keywordInputMRO calls a stage whose input is named with a Groovy keyword,
+// as Cell Ranger's LOGIC_NOT is.
+const keywordInputMRO = `
+stage NOT(in bool boolean, out bool not, src py "stages/not",)
+
+call NOT(boolean = false,)
+`
+
+// TestGenDiffSkipsPlanRefusal pins planRefusal: a run whose PLAN failed
+// refusing the shape is no test, as a refusal at transpile time is, and a
+// PLAN that failed otherwise, or a stage that failed, refuses nothing.
+func TestGenDiffSkipsPlanRefusal(t *testing.T) {
+	const refused = "mre: plan: unsupported call graph shape: TOP.W has a disable binding over its forks"
+
+	cases := []struct {
+		name, trace, stderr, want string
+	}{
+		{"refused", "60/4010e7\tPLAN\tFAILED\t1\n", refused, refused},
+		{"plan_failed_otherwise", "60/4010e7\tPLAN\tFAILED\t1\n", "mre: plan: read values.json: no such file", ""},
+		{"stage_failed", "60/4010e7\tPLAN\tCOMPLETED\t0\n61/000000\tP:N0_W (1)\tFAILED\t1\n", refused, ""},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			proj := t.TempDir()
+			writeTestFile(t, filepath.Join(proj, "trace.txt"), "hash\tname\tstatus\texit\n"+c.trace)
+			writeTestFile(t, filepath.Join(proj, "work", "60", "4010e7aa", ".command.err"), c.stderr+"\n")
+			writeTestFile(t, filepath.Join(proj, "work", "61", "000000aa", ".command.err"), c.stderr+"\n")
+
+			got, err := planRefusal(proj)
+			if err != nil || got != c.want {
+				t.Errorf("planRefusal = %q, %v; want %q", got, err, c.want)
+			}
+		})
+	}
+
+	if got, err := planRefusal(t.TempDir()); err != nil || got != "" {
+		t.Errorf("planRefusal of a run with no trace = %q, %v; want none", got, err)
 	}
 }
 
@@ -708,6 +797,10 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 			return genVerdict{}, fmt.Errorf("leg %s: %w", leg.name, err)
 		}
 
+		if lv.skip != "" {
+			return lv, nil
+		}
+
 		v.findings = append(v.findings, lv.findings...)
 		v.notes = append(v.notes, lv.notes...)
 	}
@@ -725,7 +818,7 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 
 	for i, leg := range env.legs {
 		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg))
-		if err != nil && strings.Contains(err.Error(), cg.ErrShapeUnsupported.Error()) {
+		if err != nil && (strings.Contains(err.Error(), cg.ErrShapeUnsupported.Error()) || strings.Contains(err.Error(), keywordInputRefusal)) {
 			return nil, fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)
 		}
 
@@ -736,6 +829,45 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 }
 
 func genLegProj(work string, leg genLeg) string { return filepath.Join(work, "nf-"+leg.name) }
+
+// planRefusal is the error with which the failed run of proj's PLAN
+// refused the call graph as a shape mro2nf does not wire, which it can tell
+// only from the launch values, as transpileGenLegs's refusals are told from
+// the source; "" when PLAN refused nothing.
+func planRefusal(proj string) (string, error) {
+	rows, err := parseTrace(filepath.Join(proj, "trace.txt"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	for _, r := range rows {
+		if r.Name != "PLAN" || r.Status != "FAILED" {
+			continue
+		}
+
+		errs, err := filepath.Glob(filepath.Join(proj, "work", r.Hash+"*", ".command.err"))
+		if err != nil {
+			return "", fmt.Errorf("glob PLAN stderr: %w", err)
+		}
+
+		for _, path := range errs {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read PLAN stderr: %w", err)
+			}
+
+			if strings.Contains(string(raw), cg.ErrShapeUnsupported.Error()) {
+				return strings.TrimSpace(string(raw)), nil
+			}
+		}
+	}
+
+	return "", nil
+}
 
 // isStageDir reports whether name is a stage of the fixture at dir, rather
 // than a pipeline: mrp records its own failures resolving a pipeline's
@@ -760,6 +892,13 @@ func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOu
 	runErr := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-with-trace", "trace.txt")...)
 	recovered := errors.Is(runErr, errFailedAttempt)
 
+	if runErr != nil && !recovered {
+		refusal, err := planRefusal(proj)
+		if err != nil || refusal != "" {
+			return genVerdict{skip: fmt.Sprintf("mro2nf's PLAN rejects it as unsupported (%s leg): %s", leg.name, refusal)}, err
+		}
+	}
+
 	if (runErr != nil && !recovered) || mrp.Failed {
 		failure := runErr
 		if recovered {
@@ -774,8 +913,40 @@ func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOu
 		return genVerdict{}, err
 	}
 
+	tasks, err := stageTasksVerdict(leg.name, filepath.Join(work, "mrp"), proj)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	v.findings = append(v.findings, tasks.findings...)
+	v.notes = append(v.notes, tasks.notes...)
+
 	if recovered {
 		v.findings = append(v.findings, genFinding{leg: leg.name, key: "attempts", detail: runErr.Error()})
+	}
+
+	return v, nil
+}
+
+// stageTasksVerdict holds the leg's stage tasks in proj to the jobs mrp ran
+// in the pipestance ps, one task per job (the overhead rule), and notes
+// both counts.
+func stageTasksVerdict(leg, ps, proj string) (genVerdict, error) {
+	jobs, err := mrpJobCount(ps)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	tasks, err := stageTaskCount(proj)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	counts := fmt.Sprintf("%d stage tasks, mrp ran %d jobs", tasks, jobs)
+	v := genVerdict{notes: []string{leg + ": " + counts}}
+
+	if tasks != jobs {
+		v.findings = append(v.findings, genFinding{leg: leg, key: "tasks", detail: counts})
 	}
 
 	return v, nil
@@ -808,6 +979,7 @@ func outcomeLegVerdict(env genEnv, leg genLeg, fixture, proj string, mrp runOutc
 	}
 
 	v := outcomeVerdict(leg.name, mrp, nf, detail)
+	v.notes = append(v.notes, fmt.Sprintf("%s: mrp's run: %s; mro2nf's: %s", leg.name, mrp, nf))
 
 	if reports := outcomeRuleReports(env.allow, fixture, attempts); len(reports) > 0 {
 		v.findings = append(v.findings, genFinding{leg: leg.name, key: "outcome-rules", detail: strings.Join(reports, "\n")})
