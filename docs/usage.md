@@ -569,7 +569,7 @@ Settings marked `-c` go in a config passed with `nextflow run -c <file>`.
 | `--profile=MODE` | `--mro2nf_profile <mode>` |
 | `--inspect`, the UI, `mrstat` | the trace file, `-with-report`, `-with-timeline`, `nextflow log` |
 | `mro graph` | `nextflow run main.nf -with-dag dag.html` |
-| `MRO_FORCE_UUID` | the same, in `nextflow run`'s environment; unset, the uuid is the Nextflow session id, which `-resume` keeps |
+| `MRO_FORCE_UUID` | the same, in `nextflow run`'s environment; unset, the uuid is the Nextflow session id, which `-resume` keeps. Fixed for a run: the uuid is an input of every task and the run's identity is its Nextflow session, not a stored uuid, so changing it re-runs every task on `-resume` (`mrp` keeps a pipestance's first uuid) |
 | `--vdrmode`, `--zip`, `--strict`, `--auto-adjust-memory`, `--nopreflight` | none |
 
 ## Troubleshooting
