@@ -105,7 +105,7 @@ func decode(t *testing.T, s string) any {
 func TestArgvIsMrps(t *testing.T) {
 	r := runtime(t, nil)
 
-	j, err := r.newJob(PhaseMain, "ID.mrp.P.S.fork1.chnk0", "chnk0")
+	j, err := r.newJob(Instance{Stage: Stage{Fqid: "P.S"}, ForkID: "fork1"}, PhaseMain, "chnk0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestMonitorFlag(t *testing.T) {
 	r := runtime(t, nil)
 	r.Monitor = true
 
-	j, err := r.newJob(PhaseSplit, "ID.mrp.P.S.fork0", PhaseSplit)
+	j, err := r.newJob(Instance{Stage: Stage{Fqid: "P.S"}, ForkID: "fork0"}, PhaseSplit, PhaseSplit)
 	if err != nil {
 		t.Fatal(err)
 	}

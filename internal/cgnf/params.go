@@ -136,6 +136,11 @@ func toolParams(psid string) []paramBlock {
 			params:  []launchParam{boolParam("mro2nf_monitor", false, "mrp's --monitor: mrjob kills a job that exceeds its memory request")},
 		},
 		{
+			comment: `// mrp's --profile: the profile mode of each job no overrides key sets one
+// for, unset disable; PLAN refuses a mode no profile names.`,
+			params: []launchParam{stringParam("mro2nf_profile", nil, "", "mrp's --profile: cpu, line, mem, perf, pyflame or pyspy profiles each job an overrides key does not; unset, disable")},
+		},
+		{
 			comment: `// Fail a stage task whose output resolves outside its work dir instead of
 // copying it in, for a run under an isolating executor such as docker.`,
 			params: []launchParam{profileSet(boolParam("mro2nf_confine", false, "fail a stage task whose output resolves outside its work directory, instead of copying the file in"))},
@@ -187,16 +192,16 @@ func inputParams() []paramBlock {
 			},
 		},
 		{
-			comment: `// mrp's --overrides file, over each stage's resources; PLAN reads it as
-// mrp does.`,
+			comment: `// mrp's --overrides file, over each stage's resources and profiles; PLAN
+// reads it as mrp does.`,
 			params: []launchParam{overridesParam()},
 		},
 	}
 }
 
 func overridesParam() launchParam {
-	p := stringParam("mro2nf_overrides", nil, "file-path", "mrp's --overrides file, over each stage's resources")
-	p.omics = "an s3:// URI of mrp's --overrides file, over each stage's resources"
+	p := stringParam("mro2nf_overrides", nil, "file-path", "mrp's --overrides file, over each stage's resources and profiles")
+	p.omics = "an s3:// URI of mrp's --overrides file, over each stage's resources and profiles"
 
 	return p
 }

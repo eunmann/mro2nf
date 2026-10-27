@@ -140,9 +140,9 @@ in a `-c` config, publishes elsewhere, an `s3://` prefix included.
 whose inputs did not change.
 
 - A changed entry value re-runs every task: every task reads the run's call.
-- A changed `--mro2nf_psid` re-runs every task; `--mro2nf_monitor`, every
-  stage task and OUTS; an overrides file, the stages whose resources it
-  changes and the tasks after them.
+- A changed `--mro2nf_psid` or `--mro2nf_profile` re-runs every task;
+  `--mro2nf_monitor`, every stage task and OUTS; an overrides file, the
+  stages whose resources or profiles it changes and the tasks after them.
 - A `-c` change to `cpus` or `memory` re-runs nothing.
 - An input read in place is keyed on its path; a staged input on its path,
   size and modification time (a directory's own, not its files'). Give
@@ -296,6 +296,7 @@ loads it at launch; PLAN does the type checks.
 |---|---|---|
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file ([below](#mrp---overrides)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job over its memory request |
+| `--mro2nf_profile <mode>` | `disable` | `mrp`'s `--profile`: `cpu`, `line`, `mem`, `perf`, `pyflame` or `pyspy` profiles each job an overrides key does not ([below](#mrp---overrides)) |
 | `--mro2nf_confine true` | `false` | fail a task whose output resolves outside its work directory, instead of copying it in; the container profiles always confine |
 | `--mro2nf_image <image>` | none | the image every task runs in; the container profiles require it |
 | `--mro2nf_mre <path>` | `mre` on `PATH` | the `mre` the tasks run |
@@ -353,7 +354,11 @@ nextflow run main.nf --mro2nf_overrides overrides.json
 
 PLAN reads the file with Martian's reader, so a key `mrp` does not know fails
 the run before any stage. Each job's resources resolve as under `mrp`, into its
-task and what the stage sees. `force_volatile` and `*.profile` keys have no
+task and what the stage sees. A `*.profile` key, or `--mro2nf_profile` for a
+job no key sets, profiles the job as under `mrp`: the stage's adapter profiles `cpu`, `line` and `mem`, and `mrjob` runs
+`perf`, `pyspy` and `pyflame` from the task's `PATH`, logging and running the
+job unprofiled without it. The profile lands in the job's metadata directory
+([A task's work directory](#a-tasks-work-directory)). `force_volatile` has no
 effect.
 
 ### Size one stage
@@ -549,7 +554,8 @@ Settings marked `-c` go in a config passed with `nextflow run -c <file>`.
 | `--autoretry=N` | `-c`: `process.maxRetries = N` |
 | `--psdir` | the launch directory, `-work-dir`, `-output-dir` |
 | `--onfinish` | `-c`: a `workflow.onComplete` handler |
-| `--profile`, `--inspect`, the UI, `mrstat` | the trace file, `-with-report`, `-with-timeline`, `nextflow log` |
+| `--profile=MODE` | `--mro2nf_profile <mode>` |
+| `--inspect`, the UI, `mrstat` | the trace file, `-with-report`, `-with-timeline`, `nextflow log` |
 | `mro graph` | `nextflow run main.nf -with-dag dag.html` |
 | `MRO_FORCE_UUID` | the same, in `nextflow run`'s environment; unset, the uuid is the Nextflow session id, which `-resume` keeps |
 | `--vdrmode`, `--zip`, `--strict`, `--auto-adjust-memory`, `--nopreflight` | none |

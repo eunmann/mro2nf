@@ -719,10 +719,8 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "fork_test"},
 	{name: "disable_test"},
 	{name: "retain_test"},
-	// Its comp stage is Martian's Go sum_squares (fixtureBinaries). Martian
-	// runs pipeline.mro with an --overrides file setting SUM_SQUARES's
-	// join.profile, a profiling mode mro2nf does not offer.
-	{name: "split_test_go"},
+	// Its comp stage is Martian's Go sum_squares (fixtureBinaries).
+	{name: "split_test_go", overrides: "overrides.json"},
 	{name: "split_test_go", mro: "disable_pipeline.mro"},
 }
 

@@ -31,11 +31,11 @@ func (st Stage) Phases() []string {
 }
 
 // Override is an overrides file of one key, st's fqid, that sets of each
-// phase st runs each resource r.Overrides sets for it, at the nearest key
-// on its fqname by mrp's own walk (core/override.go:159
-// ApplyResourceOverrides), so st's jobs resolve the same resources under
-// it. It is nil when none is set, so it changes only with what applies to
-// st's jobs.
+// phase st runs each resource and the profile r.Overrides sets for it, at
+// the nearest key on its fqname by mrp's own walks (core/override.go:159
+// ApplyResourceOverrides, :241 GetProfile), so st's jobs resolve the same
+// resources and profiles under it. It is nil when none is set, so it
+// changes only with what applies to st's jobs.
 func (r Runtime) Override(st Stage) ([]byte, error) {
 	so, set := new(core.StageOverride), false
 
@@ -44,15 +44,19 @@ func (r Runtime) Override(st Stage) ([]byte, error) {
 		res := core.JobResources{Threads: math.NaN(), MemGB: math.NaN(), VMemGB: math.NaN()}
 		r.Overrides.ApplyResourceOverrides(r.fqname(st.Fqid), stageType(phase), &res)
 
-		threads, mem, vmem := phaseFields(so, phase)
-		for _, f := range []struct {
+		f := phaseFields(so, phase)
+		for _, v := range []struct {
 			dst **float64
 			v   float64
-		}{{threads, res.Threads}, {mem, res.MemGB}, {vmem, res.VMemGB}} {
-			if !math.IsNaN(f.v) {
-				v := f.v
-				*f.dst, set = &v, true
+		}{{f.threads, res.Threads}, {f.mem, res.MemGB}, {f.vmem, res.VMemGB}} {
+			if !math.IsNaN(v.v) {
+				n := v.v
+				*v.dst, set = &n, true
 			}
+		}
+
+		if p := r.Overrides.GetProfile(r.fqname(st.Fqid), stageType(phase), unsetProfile); p != unsetProfile {
+			*f.profile, set = &p, true
 		}
 	}
 
@@ -68,15 +72,21 @@ func (r Runtime) Override(st Stage) ([]byte, error) {
 	return raw, nil
 }
 
-// phaseFields are so's threads, mem_gb and vmem_gb of phase.
-func phaseFields(so *core.StageOverride, phase string) (**float64, **float64, **float64) {
+// overrideFields are a StageOverride's fields of one phase.
+type overrideFields struct {
+	threads, mem, vmem **float64
+	profile            **core.ProfileMode
+}
+
+// phaseFields are so's fields of phase.
+func phaseFields(so *core.StageOverride, phase string) overrideFields {
 	switch phase {
 	case PhaseSplit:
-		return &so.SplitThreads, &so.SplitMem, &so.SplitVMem
+		return overrideFields{&so.SplitThreads, &so.SplitMem, &so.SplitVMem, &so.SplitProfile}
 	case PhaseJoin:
-		return &so.JoinThreads, &so.JoinMem, &so.JoinVMem
+		return overrideFields{&so.JoinThreads, &so.JoinMem, &so.JoinVMem, &so.JoinProfile}
 	default:
-		return &so.ChunkThreads, &so.ChunkMem, &so.ChunkVMem
+		return overrideFields{&so.ChunkThreads, &so.ChunkMem, &so.ChunkVMem, &so.ChunkProfile}
 	}
 }
 
