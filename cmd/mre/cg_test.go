@@ -102,7 +102,12 @@ func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, string, erro
 		return cg.Instance{}, "", err
 	}
 
-	inst, args, err := a.write(g, out, shim.Refs{})
+	spec, err := a.spec(g, out, shim.Refs{})
+	if err != nil {
+		return cg.Instance{}, "", err
+	}
+
+	inst, args, err := writeArgs(g, spec)
 	if err != nil || inst.Disabled {
 		return inst, "", err
 	}
@@ -134,7 +139,7 @@ func postStep(gf graphFlags, inst cg.Instance, outs map[string]any, dir, gates s
 		fields: filepath.Join(dir, "outs"), values: filepath.Join(dir, "outs_values"), fieldRefs: filepath.Join(dir, "outs_refs"), gates: gates,
 	}
 
-	return p.values, p.post(g, inst, finished{outs: m}, shim.Staged{})
+	return p.values, p.post(g, inst, finished{outs: m}, shim.Staged{}, cg.ArgsSpec{})
 }
 
 // TestCallGraphSteps drives struct_proj through its entry forks, mre

@@ -285,8 +285,8 @@ func (s *standIn) instances(n TopoNode) [][]elemItem {
 }
 
 // args resolves n's instance at elems and its args, as mre stage's args
-// step does.
-func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
+// step does, and returns it and the spec it was resolved from.
+func (s *standIn) args(n TopoNode, elems []elemItem) (Instance, ArgsSpec) {
 	s.t.Helper()
 
 	var recs []Element
@@ -338,7 +338,7 @@ func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 		s.audit(stagingAudit{node: n, fork: fork, ords: ords, given: given, resolved: s.resolvedReads(spec)})
 	}
 
-	return in
+	return in, spec
 }
 
 // recordingStore records the instances whose outs a resolution reads.
@@ -449,7 +449,7 @@ func (s *standIn) node(n TopoNode) int {
 	ran := 0
 
 	for _, elems := range s.instances(n) {
-		in := s.args(n, elems)
+		in, args := s.args(n, elems)
 		if in.Disabled {
 			continue
 		}
@@ -459,7 +459,7 @@ func (s *standIn) node(n TopoNode) int {
 			s.t.Fatal(err)
 		}
 
-		spec := PostSpec{Instance: in, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
+		spec := PostSpec{Instance: in, Outs: outs, Args: args, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
 		spec.ForkValues, spec.ForkRefs, spec.FieldRefs = forkValues(spec.Forks), s.next("fork_refs"), s.next("outs_refs")
 		if err := s.g.Post(spec); err != nil {
 			s.t.Fatalf("post %s: %v", n.Fqid, err)

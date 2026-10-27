@@ -478,6 +478,40 @@ func TestPostCountsForksFromTheSource(t *testing.T) {
 	}
 }
 
+// TestPostReadsTheGateItsCountsEvaluate (#661): KEYS's post writes the
+// forks of CONSUME_RUN, which splits the return of RUN, a sub-pipeline
+// ON.off gates. Counting them evaluates the gate, as mrp's
+// getDisabledSource does (core/fork.go:1356), so the post reads ON's outs
+// from what its task staged, and no other node's. A CONSUME_RUN instance
+// staging the gate and only its own WORK fork's outs resolves the element
+// of the gated merge mrp gives it (TOP/CONSUME_RUN/fork1: x = 20).
+func TestPostReadsTheGateItsCountsEvaluate(t *testing.T) {
+	f := loadFixture(t, "gated_sub_map")
+
+	on := f.outs("TOP.ON", nil, `{"off":false}`)
+	spec := postedSpec(t, f.g, f.outs("TOP.RUN.KEYS", nil, `{"xs":[1,2]}`), f.next("forks"))
+	spec.Args = ArgsSpec{In: []string{on}}
+
+	if err := f.g.Post(spec); err != nil {
+		t.Fatal(err)
+	}
+
+	elems := elementItems(t, spec.Forks, "TOP.CONSUME_RUN")
+	if len(elems) != 2 {
+		t.Fatalf("KEYS's post wrote %d forks of CONSUME_RUN, want 2", len(elems))
+	}
+
+	work := f.outs("TOP.RUN.WORK", Fork{f.part("TOP.RUN.WORK", ArrayIndex(1))}, `{"y":20}`)
+	_, got := f.args("TOP.CONSUME_RUN", elems[1], on, work)
+	wantArgs(t, "TOP.CONSUME_RUN fork1", got, `{"x":20}`)
+
+	for node, want := range map[string][]string{"TOP.RUN.KEYS": {"TOP.ON"}, "TOP.SKIP.KEYS": {"TOP.OFF"}, "TOP.ON": nil, "TOP.RUN.WORK": nil} {
+		if diff := cmp.Diff(want, f.g.postGates(node)); diff != "" {
+			t.Errorf("gates %s's post reads (-want +got):\n%s", node, diff)
+		}
+	}
+}
+
 // TestPostFailsUnderAnOuterForkItDoesNotHold (#602): SRC feeds USE, whose
 // forks vary with OUTER, a map call SRC is not forked on. Each instance of
 // SRC holds only its own outs, so its post fails at the first fork of OUTER

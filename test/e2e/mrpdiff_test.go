@@ -454,6 +454,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// under literal and runtime gates; mrp merges each statically.
 	{name: "empty_fork_gated"},
 	{name: "empty_fork_gated_sub"},
+	// #661: map calls over the return of a sub-pipeline a stage's output
+	// gates, enabled and disabled, the sub-pipeline itself mapping over its
+	// own stage's output.
+	{name: "gated_sub_map"},
 	// #435: splits of a mapped call's whole ref over an invocation-known null
 	// and empty, into a stage and into a sub-pipeline.
 	{name: "empty_fork_wholeref"},

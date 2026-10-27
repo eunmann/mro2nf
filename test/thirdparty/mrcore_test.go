@@ -44,7 +44,7 @@ func mrcoreAdapted() map[string]string {
 		"(*Node).resolveInputs":          "a job's _args only (no keep-split), no read limit, a not-ready read fails",
 		"(*TopNode).resolveMerge":        "getParts' errors are returned, not also printed",
 		"(*TopNode).getParts":            "expands the bound node scoped to the fork (view), its table parts recomputed",
-		"(*TopNode).resolveSplit":        "takes a staged or literal element without resolving the collection (splitElement)",
+		"(*TopNode).resolveSplit":        "takes a staged, literal or merged element without resolving the collection (splitElement)",
 		"getArrayElement":                "an index past the end wraps ErrNoElement",
 		"(*Node).matchFork":              "a determined fork id is the fork; others match within a scoped view",
 		"(*Node).matchForks":             "matches within a scoped view",
