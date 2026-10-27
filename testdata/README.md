@@ -2,7 +2,8 @@
 
 Each directory is one pipeline fixture: `pipeline.mro`, its `stages/<stage>/`
 code, and an `expected/` tree holding the **goldens** the transpiled Nextflow
-run must reproduce. A golden has two parts:
+run must reproduce. The fixtures copied from Martian's own tests are listed,
+with Martian's license, in `NOTICE.martian`. A golden has two parts:
 
 - **The outputs JSON** (`expected/outs.json`, or the file the `goldenCases`
   entry in `test/e2e/golden_test.go` names): mrp's path-normalized pipeline
@@ -44,7 +45,9 @@ run must reproduce. A golden has two parts:
   records that issue, and the case fails once the bug is fixed.
 
   Every fixture is in exactly one of `mrpDiffCases`, `mrpOutcomeCases` and
-  `mrpUnrunnable` (with the reason mrp cannot be compared on it). Both suites
+  `mrpUnrunnable` (with the reason mrp cannot be compared on it);
+  `mrpDiffCases` may also run a fixture's other invocations, such as
+  `split_test_go`'s `disable_pipeline.mro`. Both suites
   need a Martian build (`MARTIAN_BIN`, default `~/workdir/martian/bin`);
   `make test-e2e` includes them and CI runs them on every PR.
 
