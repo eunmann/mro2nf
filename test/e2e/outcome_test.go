@@ -307,7 +307,8 @@ func outcomeOf(m divergence.OutcomeMatcher) runOutcome {
 // overrides names an mrp --overrides file in the fixture's dir, which both
 // runs are launched with. params names a params file in the fixture's dir
 // the Nextflow run is launched with, and mro the invocation mrp runs in
-// place of pipeline.mro, whose literals are those values.
+// place of pipeline.mro, whose literals are those values. monitor launches
+// mrp with --monitor and the Nextflow run with --mro2nf_monitor true.
 type mrpOutcomeCase struct {
 	name       string
 	mrp        runOutcome
@@ -315,6 +316,7 @@ type mrpOutcomeCase struct {
 	overrides  string
 	params     string
 	mro        string
+	monitor    bool
 }
 
 // errOutcomeCase reports a malformed mrpOutcomeCases entry.
