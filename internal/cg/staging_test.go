@@ -12,24 +12,13 @@ import (
 // standInSkipped are the fixtures and corpus entries the stand-in cannot
 // run, by why.
 func standInSkipped() map[string]string {
-	skipped := map[string]string{
+	return map[string]string{
 		"split_gate_entry": "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
 		"forkdisabled":     "GATED zips the entry's xs with FLAGS's skips, whose length no stand-in knows",
 		"post_outer_fork":  "SRC's post fails, as mrp does (TestPostFailsUnderAnOuterForkItDoesNotHold)",
 		"witness_known_inner": "its witness's rows differ in length, where ROW's post fails as mrp's run panics " +
 			"(map filtering an array); its literal is TestMrpDiff's",
 	}
-
-	const gatedPost = "#661: the post of a stage in a sub-pipeline a stage's output disables panics computing " +
-		"the elements of a map call it feeds (disabled binding ... was not ready), where mrp runs it"
-
-	for _, mro := range []string{
-		"", "_array_of_maps", "_array_on", "_map_of_arrays", "_mapped_parent", "_mapped_parent_keys", "_mapped_parent_multi", "_on",
-	} {
-		skipped["corpus/martian/martian/core/testdata/map_call_disabled_pipeline"+mro+".mro"] = gatedPost
-	}
-
-	return skipped
 }
 
 // TestStandInStagesOnlyWhatItReads holds every instance of every fixture to
