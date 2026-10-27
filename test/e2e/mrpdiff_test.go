@@ -117,7 +117,7 @@ func execMrp(ctx context.Context, bin, dir, mro, tmp string, extra ...string) ([
 	// disable keeps intermediate stage files, which the stage-ABI diff hashes
 	// through the paths in each invocation's _args/_outs; mrp's default rolling
 	// VDR deletes them once their consumers finish.
-	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable", extra...)
+	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable", nil, extra...)
 }
 
 // The pool mrp's local job manager grants the differential's jobs from, its
@@ -143,8 +143,9 @@ func mrpPoolArgs(t *testing.T, proj string) []string {
 	return []string{"-c", path}
 }
 
-// execMrpVDR is execMrp under the given --vdrmode.
-func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, extra ...string) ([]byte, error) {
+// execMrpVDR is execMrp under the given --vdrmode, with env added to mrp's
+// environment, which its jobs inherit.
+func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, env []string, extra ...string) ([]byte, error) {
 	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
 	// invocations pair up.
 	cmd := exec.CommandContext(ctx, filepath.Join(bin, "mrp"), slices.Concat([]string{
@@ -153,7 +154,7 @@ func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, extra .
 		"--disable-ui", "--vdrmode=" + vdrMode,
 	}, extra)...)
 	cmd.Dir = tmp
-	cmd.Env = append(os.Environ(), "MROPATH="+dir)
+	cmd.Env = slices.Concat(os.Environ(), []string{"MROPATH=" + dir}, env)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 30 * time.Second
 
@@ -1115,6 +1116,13 @@ func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []
 // flags, and classifies the run.
 func mrpOutcome(ctx context.Context, bin, dir, mro, tmp string, extra ...string) (runOutcome, error) {
 	_, err := execMrp(ctx, bin, dir, mro, tmp, extra...)
+
+	return mrpRunEnded(err, tmp)
+}
+
+// mrpRunEnded classifies the mrp run in tmp that ended with err. Only mrp's
+// non-zero exit is a failed run; any other error is returned.
+func mrpRunEnded(err error, tmp string) (runOutcome, error) {
 	if err == nil {
 		return runOutcome{}, nil
 	}

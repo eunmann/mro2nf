@@ -55,7 +55,7 @@ func diffVDRMode(t *testing.T, bin, fixture, mode, proj string) {
 	t.Helper()
 
 	tmp := t.TempDir()
-	if out, err := execMrpVDR(t.Context(), bin, filepath.Join(root, "testdata", fixture), "pipeline.mro", tmp, mode); err != nil {
+	if out, err := execMrpVDR(t.Context(), bin, filepath.Join(root, "testdata", fixture), "pipeline.mro", tmp, mode, nil); err != nil {
 		t.Fatalf("mrp --vdrmode=%s: %v\n%s", mode, err, tail(out, 12))
 	}
 
