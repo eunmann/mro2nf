@@ -968,7 +968,13 @@ func (rp *cgReplay) readNodeOverrides(work string) {
 		rp.t.Fatal(err)
 	}
 
-	for line := range strings.SplitSeq(strings.TrimSpace(string(nodes)), "\n") {
+	// A pipeline of no stage calls (returnonly) plans no nodes.
+	text := strings.TrimSpace(string(nodes))
+	if text == "" {
+		return
+	}
+
+	for line := range strings.SplitSeq(text, "\n") {
 		f := strings.Split(line, " ")
 		if len(f) != 8 {
 			rp.t.Fatalf("nodes line %q: want fqid, digest, off, disabled keys, cpus, memory, overrides and collapsed roots", line)
