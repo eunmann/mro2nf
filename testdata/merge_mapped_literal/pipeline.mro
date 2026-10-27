@@ -1,0 +1,63 @@
+# #655 (Martian's test/map_test, SOME_STATIC.MAPPED_CONST_SUM): a reduce
+# over a mapped sub-pipeline's literal output, the map call forked over a
+# mapped stage's outs. TOTAL's _args hold one literal per fork of ONE, so
+# it reads none of SQ's outs.
+stage RANGE(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/range",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+stage SUM(
+    in  int[] vs,
+    out int   s,
+    src py    "stages/sum",
+)
+
+pipeline ONE(
+    in  int x,
+    out int x,
+    out int one,
+)
+{
+    return (
+        x   = self.x,
+        one = 1,
+    )
+}
+
+pipeline TOP(
+    in  int n,
+    out int count,
+)
+{
+    call RANGE(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split RANGE.xs,
+    )
+
+    map call ONE(
+        x = split SQ.y,
+    )
+
+    call SUM as TOTAL(
+        vs = ONE.one,
+    )
+
+    return (
+        count = TOTAL.s,
+    )
+}
+
+call TOP(
+    n = 3,
+)

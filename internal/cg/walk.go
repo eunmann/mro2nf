@@ -124,18 +124,15 @@ func (w *bindingWalk) split(x *syntax.SplitExp, ctx []splitCtx) {
 // forks a stage fixes takes them from the root's source, as mrp does: the
 // instances it gathers are no count of them, as a disabled one posts none.
 // It reads what counting them reads (Graph.countReads), not the source's
-// every value.
+// every value. Its fork node only names the node whose forks it gathers and
+// constrains them (core/resolve.go:330-348 resolveMerge), so no value of it
+// is read.
 func (w *bindingWalk) merge(x *syntax.MergeExp, ctx []splitCtx) {
 	if w.g.mergeGathersNone(x, w.reader.forkRoots()) {
 		return
 	}
 
 	w.exp(x.Value, ctx)
-
-	if x.ForkNode != nil {
-		w.visit(x.ForkNode, ctx)
-	}
-
 	w.countReads(x, ctx)
 }
 
