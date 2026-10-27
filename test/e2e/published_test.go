@@ -50,6 +50,12 @@ func diffPublishedUnder(allow divergence.Allowlist, fixture, ps, results string)
 		return nil, err
 	}
 
+	return pub.diff()
+}
+
+// diff reports each part of what mrp and mro2nf published that differs: the
+// file tree, then the outs JSON.
+func (pub published) diff() ([]string, error) {
 	var reports []string
 
 	if diff := cmp.Diff(pub.mrpTree, pub.nfTree); diff != "" {

@@ -4,10 +4,17 @@ package e2e
 
 // Real-CellRanger differential (opt-in local baseline).
 //
-// This drives the actual 10x Genomics CellRanger `count` testrun pipeline BOTH
-// ways — the real Martian runner (mrp) for the golden, and the generated Nextflow
-// — and asserts the published metrics are byte-identical, then reports the
-// Nextflow task-shape so it can be tracked as a baseline over time.
+// This drives the actual 10x Genomics CellRanger `count` testrun pipeline
+// under the real Martian runner (mrp) twice and under the generated Nextflow
+// in two legs: the local executor, and the cloud simulation (cloudConfig:
+// each task in its own scratch dir, its inputs and outputs copied, so no
+// path is shared). Each leg must publish the tree mrp publishes, path for
+// path and byte for byte, and run one stage task per mrp job.
+//
+// The two mrp runs measure what mrp itself writes differently on each run:
+// each such file is compared by the part of it both mrp runs write the same
+// (stableDigests), and a file mrp varies that no stable digest covers fails
+// the test.
 //
 // It is OPT-IN: it skips unless CELLRANGER_HOME points at an extracted
 // CellRanger bundle (cellranger is licensed 10x software and is NOT committed, so
@@ -16,27 +23,30 @@ package e2e
 //
 //	CELLRANGER_HOME=~/Downloads/cellranger-10.1.0 make test-cellranger
 //
-// Knobs: CELLRANGER_LOCALCORES / CELLRANGER_LOCALMEM are the pool of both
-// runs: mrp's --localcores and --localmem, and the Nextflow run's
-// process.resourceLimits. The whole thing runs the pipeline twice, so budget
-// a few minutes.
+// Knobs: CELLRANGER_LOCALCORES / CELLRANGER_LOCALMEM are the pool of every
+// run: mrp's --localcores and --localmem, and the Nextflow runs'
+// process.resourceLimits. The pipeline runs four times, one after another,
+// so budget about eight minutes.
 
 import (
-	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cellrangerHome resolves an extracted CellRanger bundle from CELLRANGER_HOME and
 // skips when it is absent — the differential is a LOCAL baseline, never a CI or
 // normal-local gate (same opt-in shape as martianBin). It checks for the pieces
-// the run needs: the launcher, the env script, the mro tree, and the bundled
-// Martian runtime (mrp + mrjob + the python adapter).
+// the run needs: the launcher, the env script, the mro tree, the bundled
+// Martian runtime (mrp + mrjob + the python adapter), and the samtools the
+// BAM comparison reads with.
 func cellrangerHome(t *testing.T) string {
 	t.Helper()
 
@@ -53,6 +63,7 @@ func cellrangerHome(t *testing.T) string {
 		"external/martian/bin/mrp",
 		"external/martian/bin/mrjob",
 		"external/martian/adapters/python/martian_shell.py",
+		crSamtools,
 	} {
 		if !fileExists(filepath.Join(home, rel)) {
 			t.Skipf("CELLRANGER_HOME=%s is missing %s; not a complete CellRanger bundle", home, rel)
@@ -90,8 +101,19 @@ func crResource(env, def string) string {
 	return def
 }
 
-// TestCellRangerDifferential runs CellRanger `count` under mrp and under the
-// generated Nextflow and asserts byte-identical published metrics.
+// crRun is what every leg of the differential shares: the bundle, the
+// invocation, the pool, the golden pipestance, and the stable digest of each
+// file mrp writes differently on each run, by its path under outs/.
+type crRun struct {
+	home, tmp, mro string
+	cores, mem     string
+	golden         string
+	varying        map[string]string
+}
+
+// TestCellRangerDifferential runs CellRanger `count` under mrp twice and
+// under the generated Nextflow, locally and under the cloud simulation, and
+// holds each Nextflow leg to mrp's published tree and job count.
 func TestCellRangerDifferential(t *testing.T) {
 	home := cellrangerHome(t)
 	requireTools(t, "bash", "nextflow", "java", "python3")
@@ -99,76 +121,206 @@ func TestCellRangerDifferential(t *testing.T) {
 
 	tmp := t.TempDir()
 
-	// 1. Emit the count-pipeline invocation .mro (cellranger testrun --dry). The
-	//    dry run writes __<id>.mro into the cwd and does not execute the pipeline.
+	// The dry run writes the count pipeline's invocation __<id>.mro into the
+	// cwd without running it; it names its inputs by absolute path in the
+	// bundle, so nothing else needs staging.
 	crBash(t, home, tmp, "cellranger testrun --dry",
 		shellQuote(filepath.Join(home, "bin", "cellranger"))+" testrun --id=crdiff --dry")
 
-	mro := filepath.Join(tmp, "__crdiff.mro")
-	if !fileExists(mro) {
-		t.Fatalf("cellranger testrun --dry did not produce %s", mro)
+	r := crRun{
+		home: home, tmp: tmp, mro: filepath.Join(tmp, "__crdiff.mro"),
+		cores: crResource("CELLRANGER_LOCALCORES", "4"), mem: crResource("CELLRANGER_LOCALMEM", "8"),
+	}
+	if !fileExists(r.mro) {
+		t.Fatalf("cellranger testrun --dry did not produce %s", r.mro)
 	}
 
-	// 2. Golden: the real Martian runner on that .mro. mrp creates the pipestance
-	//    (named "golden") in the cwd; the .mro references its inputs by absolute
-	//    path in the bundle, so nothing else needs staging.
-	cores, mem := crResource("CELLRANGER_LOCALCORES", "4"), crResource("CELLRANGER_LOCALMEM", "8")
-	crBash(t, home, tmp, "mrp golden run",
-		"mrp "+shellQuote(mro)+" golden --jobmode=local --localcores="+cores+
-			" --localmem="+mem+" --disable-ui --nopreflight")
+	r.golden = runCrMrp(t, r, "golden")
+	r.varying = measureRunVarying(t, r, runCrMrp(t, r, "rerun"))
 
-	goldenMetrics := filepath.Join(tmp, "golden", "outs", "metrics_summary.csv")
-	if !fileExists(goldenMetrics) {
-		t.Fatalf("mrp golden did not publish %s", goldenMetrics)
+	t.Run("local", func(t *testing.T) { runCrLeg(t, r, "local", false) })
+	t.Run("cloud", func(t *testing.T) { runCrLeg(t, r, "cloud", true) })
+}
+
+// runCrMrp runs mrp on the invocation into the pipestance <tmp>/<name> and
+// returns its dir. Preflights run, as `cellranger` runs them, because mro2nf
+// runs them too and the job count must pair up.
+func runCrMrp(t *testing.T, r crRun, name string) string {
+	t.Helper()
+
+	start := time.Now()
+
+	crBash(t, r.home, r.tmp, "mrp "+name,
+		"mrp "+shellQuote(r.mro)+" "+name+" --jobmode=local --localcores="+r.cores+
+			" --localmem="+r.mem+" --disable-ui")
+	t.Logf("mrp %s: %s", name, time.Since(start).Round(time.Second))
+
+	return filepath.Join(r.tmp, name)
+}
+
+// measureRunVarying returns the stable digest of each file the golden and
+// rerun pipestances published with different bytes, by its path under outs/.
+// It fails for a path only one run published, a file no stable digest
+// covers, and a file whose stable part differs between the runs.
+func measureRunVarying(t *testing.T, r crRun, rerun string) map[string]string {
+	t.Helper()
+
+	trees := make([]map[string]string, 2)
+
+	for i, ps := range []string{r.golden, rerun} {
+		tree, err := publishedTree(filepath.Join(ps, "outs"), true, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		trees[i] = tree
 	}
 
-	// 3. Transpile the SAME .mro (pure Go; no CellRanger env needed).
-	proj := filepath.Join(tmp, "nf")
-	transpileCellRanger(t, home, mro, proj)
+	varying := map[string]string{}
 
-	// 4. Run the generated Nextflow with the bundle env sourced, its stages
-	//    under the bundle's own Martian runtime. The local profile grants
-	//    each job from mrp's pool and clamps its task to it (#207, #545), so
-	//    an oversized reservation (the 30 GB cloupe join) runs instead of
-	//    failing.
-	pool := fmt.Sprintf("process.resourceLimits = [cpus: %s, memory: %s.GB]\n", cores, mem)
+	for _, p := range slices.Sorted(maps.Keys(union(trees[0], trees[1]))) {
+		a, b := trees[0][p], trees[1][p]
+
+		switch {
+		case a == b:
+			continue
+		case a == "" || b == "":
+			t.Errorf("one mrp run published %s and the other did not", p)
+
+			continue
+		}
+
+		want, err := stableDigest(r.home, filepath.Join(r.golden, "outs", p))
+		if err != nil {
+			t.Errorf("mrp writes %s differently on each run: %v", p, err)
+
+			continue
+		}
+
+		if got, err := stableDigest(r.home, filepath.Join(rerun, "outs", p)); err != nil || got != want {
+			t.Errorf("mrp writes even the stable part of %s differently on each run (err %v)", p, err)
+
+			continue
+		}
+
+		varying[p] = want
+	}
+
+	t.Logf("run-varying set (mrp vs mrp): %v", slices.Sorted(maps.Keys(varying)))
+
+	return varying
+}
+
+// runCrLeg transpiles the invocation into its own project, runs it under
+// Nextflow with its own work dir, and holds it to the golden pipestance.
+func runCrLeg(t *testing.T, r crRun, name string, cloud bool) {
+	t.Helper()
+
+	proj := filepath.Join(r.tmp, "nf-"+name)
+	transpileCellRanger(t, r.home, r.mro, proj)
+
+	// The local profile grants each job from mrp's pool and clamps its task
+	// to it (#207, #545), so an oversized reservation (the 30 GB cloupe join)
+	// runs instead of failing.
+	pool := fmt.Sprintf("process.resourceLimits = [cpus: %s, memory: %s.GB]\n", r.cores, r.mem)
 	if err := os.WriteFile(filepath.Join(proj, "pool.config"), []byte(pool), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	martian := filepath.Join(home, "external", "martian")
-	crBash(t, home, proj, "nextflow run",
+	configs := " -c pool.config"
+
+	if cloud {
+		writeCloudConfig(t, proj)
+
+		configs += " -c cloud.config"
+	}
+
+	martian := filepath.Join(r.home, "external", "martian")
+	start := time.Now()
+
+	crBash(t, r.home, proj, "nextflow run "+name,
 		"NXF_ANSI_LOG=false NXF_OFFLINE=true NXF_OPTS='-Xms256m -Xmx2g' "+
-			"nextflow -q run main.nf -profile standard -c pool.config -with-trace trace.txt "+
-			"-work-dir "+shellQuote(filepath.Join(tmp, "nfwork"))+
+			"nextflow -q run main.nf -profile standard"+configs+" -with-trace trace.txt "+
+			"-work-dir "+shellQuote(filepath.Join(r.tmp, "work-"+name))+
 			" --mro2nf_mre "+shellQuote(filepath.Join(root, "mre"))+
 			" --mro2nf_mrjob "+shellQuote(filepath.Join(martian, "bin", "mrjob"))+
 			" --mro2nf_adapters "+shellQuote(filepath.Join(martian, "adapters")))
+	t.Logf("nextflow %s: %s", name, time.Since(start).Round(time.Second))
 
-	nfOuts := filepath.Join(proj, "results")
-
-	// 5. The biological result must be byte-identical to mrp. metrics_summary.csv
-	//    is the canonical single-cell result (cells, reads, mapping) and carries
-	//    no run-id/timestamp, so it compares exactly across the two runners.
-	assertBytesEqual(t, goldenMetrics, filepath.Join(nfOuts, "metrics_summary.csv"), "metrics_summary.csv")
-
-	// 6. The expected published outputs are all present.
-	for _, o := range []string{
-		"filtered_feature_bc_matrix.h5",
-		"raw_feature_bc_matrix.h5",
-		"cloupe.cloupe",
-		"web_summary.html",
-		"possorted_genome_bam.bam",
-		"molecule_info.h5",
-	} {
-		if !fileExists(filepath.Join(nfOuts, o)) {
-			t.Errorf("generated Nextflow did not publish expected output %s", o)
-		}
+	trace := filepath.Join(proj, "trace.txt")
+	if err := checkAttempts(readTrace(t, trace)); err != nil {
+		t.Error(err)
 	}
 
-	// 7. Record the task-shape as a tracked baseline (stage vs plumbing task
-	//    counts) — the number future optimizer changes are compared against.
-	reportTaskShape(t, filepath.Join(proj, "trace.txt"))
+	compareCrTree(t, r, filepath.Join(proj, "results"))
+	checkCrStageTasks(t, name, r.golden, proj)
+	reportTaskShape(t, trace)
+}
+
+// stableMark prefixes a published tree's value for a file compared by its
+// stable digest, so it cannot equal a whole-file digest.
+const stableMark = "<stable part> "
+
+// compareCrTree holds the results dir to the golden pipestance's outs as the
+// mrp differential does, each run-varying file by its stable digest.
+func compareCrTree(t *testing.T, r crRun, results string) {
+	t.Helper()
+
+	pub, err := loadPublished(mustAllowlist(t), "cellranger", r.golden, results)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for p, want := range r.varying {
+		pub.mrpTree[p] = stableMark + want
+
+		got, ok := pub.nfTree[p]
+		if !ok {
+			continue
+		}
+
+		digest, err := stableDigest(r.home, filepath.Join(results, p))
+		if err != nil {
+			t.Errorf("stable digest of published %s: %v", p, err)
+
+			continue
+		}
+
+		mark := ""
+		if strings.HasPrefix(got, linkMark) {
+			mark = linkMark
+		}
+
+		pub.nfTree[p] = mark + stableMark + digest
+	}
+
+	reports, err := pub.diff()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rep := range reports {
+		t.Error(rep)
+	}
+}
+
+// checkCrStageTasks holds the leg's stage tasks to the jobs mrp ran, one
+// task per job, as gen-diff does.
+func checkCrStageTasks(t *testing.T, leg, golden, proj string) {
+	t.Helper()
+
+	v, err := stageTasksVerdict(leg, golden, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range v.notes {
+		t.Log(n)
+	}
+
+	for _, f := range v.findings {
+		t.Errorf("%s: stage tasks differ from mrp's jobs: %s", f.leg, f.detail)
+	}
 }
 
 // transpileCellRanger runs the built mro2nf on a bundle .mro into proj.
@@ -180,26 +332,6 @@ func transpileCellRanger(t *testing.T, home, mro, proj string) {
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("transpile CellRanger: %v\n%s", err, tail(out, 30))
-	}
-}
-
-// assertBytesEqual fails if two files differ byte-for-byte.
-func assertBytesEqual(t *testing.T, want, got, label string) {
-	t.Helper()
-
-	a, err := os.ReadFile(want)
-	if err != nil {
-		t.Fatalf("read golden %s: %v", label, err)
-	}
-
-	b, err := os.ReadFile(got)
-	if err != nil {
-		t.Fatalf("read generated %s: %v", label, err)
-	}
-
-	if !bytes.Equal(a, b) {
-		t.Errorf("%s differs between mrp and generated Nextflow\n--- mrp ---\n%s\n--- nextflow ---\n%s",
-			label, tail(a, 6), tail(b, 6))
 	}
 }
 
