@@ -2,6 +2,7 @@ package gen
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -174,6 +175,91 @@ func TestStubIsAPureFunctionOfItsInputs(t *testing.T) {
 
 	if changed, _ := r.run("main", args(in1, 3)); changed == first {
 		t.Error("a different float input gave the same outputs")
+	}
+}
+
+// TestStubUnseededDrawsAreUnchanged pins what an unseeded stub draws, the
+// sha256 of its split and main results on fixed inputs: the generative
+// differential's programs and the fixtures shrunk from them draw these
+// values, which a seed (TestStubSeedRedraws) must leave as they were.
+func TestStubUnseededDrawsAreUnchanged(t *testing.T) {
+	r := newStubRunner(t, stubProgram())
+	args := map[string]any{"i0": nil, "i1": []any{2.5, 1}, "c0": map[string]any{"f0": nil, "f1": map[string]any{"a": 1}}}
+
+	for phase, want := range map[string]string{
+		"split": "a801892eaecef0a1cee88e873596db981595eb1dc4ed5da491376987900435b2",
+		"main":  "4b2e4deaa8905dc80a3023706c65e04905bda14daca2018d8d197420fce601e0",
+	} {
+		out, _ := r.run(phase, args)
+		if got := fmt.Sprintf("%x", sha256.Sum256([]byte(out))); got != want {
+			t.Errorf("unseeded %s draws sha256 %s, want %s:\n%s", phase, got, want, out)
+		}
+	}
+}
+
+// TestStubSeedRedraws checks a seed changes what the stub draws from the
+// same inputs, and the same seed draws the same.
+func TestStubSeedRedraws(t *testing.T) {
+	unseeded := newStubRunner(t, stubProgram())
+	seeded := newStubRunner(t, stubProgram())
+	setSpecSeed(t, seeded.stageDir, 7)
+
+	args := map[string]any{"i0": nil, "i1": []any{2.5, 1}}
+
+	base, _ := unseeded.run("main", args)
+	first, _ := seeded.run("main", args)
+	second, _ := seeded.run("main", args)
+
+	if first != second {
+		t.Errorf("seed 7 drew differently from the same inputs:\n%s\n%s", first, second)
+	}
+
+	if first == base {
+		t.Errorf("seed 7 drew what the unseeded stub draws:\n%s", first)
+	}
+}
+
+// setSpecSeed sets seed in the spec.json of the stub in stageDir.
+func setSpecSeed(t *testing.T, stageDir string, seed uint64) {
+	t.Helper()
+
+	path := filepath.Join(stageDir, "spec.json")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var spec stubSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	spec.Seed = seed
+
+	if err := writeStub(stageDir, spec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStubDrawsUntypedMaps checks the stub draws a value of Martian's
+// untyped map, which a corpus stage may declare and no generated one does:
+// an object, alone or in an array.
+func TestStubDrawsUntypedMaps(t *testing.T) {
+	p := stubProgram()
+	p.Stages[0].Split = false
+	p.Stages[0].Out = []Param{{Name: "m", Type: Type{Base: "map"}}, {Name: "ms", Type: Type{Base: "map", Arr: 1}}}
+	r := newStubRunner(t, p)
+
+	for i := range 20 {
+		out, _ := r.run("main", map[string]any{"i0": nil, "i1": []any{float64(i)}})
+
+		var o struct {
+			M  *map[string]any  `json:"m"`
+			Ms []map[string]any `json:"ms"`
+		}
+
+		decodeInto(t, out, &o)
 	}
 }
 

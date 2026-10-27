@@ -59,7 +59,7 @@ scripts/aws/           comparison and critical-path analysis of live AWS runs
 | `make test-scale` | the bench shapes at production widths (`SCALE_RUN`, `SCALE_WIDTH`) |
 | `make gen-diff` | generated programs against `mrp` (`GEN_SEEDS`, `GEN_COUNT`) |
 | `make test-cellranger` | the Cell Ranger check (`CELLRANGER_HOME`) |
-| `make test-corpus` | the corpus sweeps and `nextflow lint` over the pipelines whose MROPATH is `CORPUS` |
+| `make test-corpus` | the corpus sweeps, `nextflow lint` and the stub differential over the pipelines whose MROPATH is `CORPUS` |
 | `make record-goldens` | re-record `testdata/*/expected/outs/` from `mrp` |
 | `make docs-divergences`, `make notices` | regenerate `docs/divergences.md` and `THIRD_PARTY_NOTICES` |
 | `make vulncheck`, `make deadcode`, `make cross` | govulncheck, unreachable code, a build for each release platform |
@@ -78,7 +78,7 @@ The bar is `mrp` itself. Every difference a test finds must match an entry of
 | Docker | `make test-e2e-docker` | container isolation, the AWS Batch profile run on local Docker, the HealthOmics package |
 | Overhead | `make bench`, `make test-scale` | tasks, staged bytes and driver heap at two widths per shape ([design](docs/design.md#the-overhead-rule)) |
 | Cell Ranger | `make test-cellranger` | Cell Ranger 10.1.0 `testrun` under both runners, `metrics_summary.csv` byte for byte; needs a licensed bundle, never in CI |
-| Corpus | `make test-corpus CORPUS=<mropath>` | every pipeline and stage under the MROPATH, invoked with its inputs unset, through Martian's compiler, the unit tests' call-graph sweeps and `nextflow lint`. The MIT corpus in `testdata/corpus` runs in `make test` and `make lint-nf`, the AGPL repos in the nightly. Point it at your own licensed pipelines, such as a Cell Ranger install's `mro` dir; they never run in CI |
+| Corpus | `make test-corpus CORPUS=<mropath>` | every pipeline and stage under the MROPATH, invoked with its inputs unset, through Martian's compiler, the unit tests' call-graph sweeps and `nextflow lint`, then under both runners with every stage replaced by the generative differential's stub, under `CORPUS_SEEDS` seeds (`TestCorpusStubDiff`). The MIT corpus in `testdata/corpus` runs in `make test`, `make lint-nf` and `make test-e2e`, the AGPL repos in the nightly. Point it at your own licensed pipelines, such as a Cell Ranger install's `mro` dir; they never run in CI |
 
 e2e tests carry the `e2e` build tag and always run with `-count=1`. A fixture
 `mrp` cannot complete (`exec_min`, `mixed_adapters`) has a golden only.

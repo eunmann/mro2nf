@@ -332,17 +332,9 @@ func TestMrpDiffBenchJobs(t *testing.T) {
 			tmp := t.TempDir()
 			runMrpAt(t, bin, filepath.Join(root, "bench", l.dir), l.mro, tmp)
 
-			jobs := 0
-
-			err := filepath.WalkDir(filepath.Join(tmp, "mrp"), func(_ string, d fs.DirEntry, err error) error {
-				if err == nil && !d.IsDir() && d.Name() == "_jobinfo" {
-					jobs++
-				}
-
-				return err
-			})
+			jobs, err := mrpJobCount(filepath.Join(tmp, "mrp"))
 			if err != nil {
-				t.Fatalf("walk pipestance: %v", err)
+				t.Fatal(err)
 			}
 
 			if jobs != l.mrpJobs {
@@ -350,6 +342,52 @@ func TestMrpDiffBenchJobs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mrpJobCount is the number of jobs mrp ran in the pipestance ps: it writes
+// one _jobinfo per job (each split, chunk and join of a split stage; one per
+// non-split stage fork; none for a disabled call).
+func mrpJobCount(ps string) (int, error) {
+	jobs := 0
+
+	err := filepath.WalkDir(ps, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "_jobinfo" {
+			jobs++
+		}
+
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("walk pipestance: %w", err)
+	}
+
+	return jobs, nil
+}
+
+// stageTaskCount is the number of stage tasks the run of proj ran: the
+// tasks of its stage module's processes (stageAliases) its trace.txt lists,
+// each once however many attempts it took.
+func stageTaskCount(proj string) (int, error) {
+	aliases, err := stageAliases(proj)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := parseTrace(filepath.Join(proj, "trace.txt"))
+	if err != nil {
+		return 0, err
+	}
+
+	tasks := map[string]bool{}
+
+	for _, r := range rows {
+		name, _, _ := strings.Cut(r.Name, " (")
+		if _, found := slices.BinarySearch(aliases, name[strings.LastIndex(name, ":")+1:]); found {
+			tasks[r.Name] = true
+		}
+	}
+
+	return len(tasks), nil
 }
 
 // errNonLocalWorkdir rejects a BENCH_WORKDIR on an object store, where the

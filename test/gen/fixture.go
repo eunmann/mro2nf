@@ -13,7 +13,8 @@ import (
 var stubCode []byte
 
 // stubSpec is the stage description the stub reads from spec.json beside it:
-// parameter types by name, and every struct type a value may hold.
+// parameter types by name, every struct type a value may hold, and the seed
+// its draws start from, none (0) for a generated program's stage.
 type stubSpec struct {
 	Name      string                 `json:"name"`
 	In        [][2]string            `json:"in"`
@@ -24,6 +25,7 @@ type stubSpec struct {
 	Structs   map[string][][2]string `json:"structs"`
 	FileTypes []string               `json:"filetypes"`
 	Fail      *Fail                  `json:"fail"`
+	Seed      uint64                 `json:"seed,omitempty"`
 }
 
 // Fixture files are only read back by the user who runs the differential.
@@ -55,18 +57,7 @@ func (p *Program) WriteFixture(dir string) error {
 }
 
 func (p *Program) writeStage(dir string, s *Stage, structs map[string][][2]string) error {
-	stageDir := filepath.Join(dir, filepath.FromSlash(StageDir(s.Name)))
-	if err := os.MkdirAll(stageDir, dirPerm); err != nil {
-		return fmt.Errorf("create stage dir: %w", err)
-	}
-
-	var spec bytes.Buffer
-
-	enc := json.NewEncoder(&spec)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-
-	err := enc.Encode(stubSpec{
+	return writeStub(filepath.Join(dir, filepath.FromSlash(StageDir(s.Name))), stubSpec{
 		Name:      s.Name,
 		In:        paramSpecs(s.In),
 		Out:       paramSpecs(s.Out),
@@ -77,7 +68,21 @@ func (p *Program) writeStage(dir string, s *Stage, structs map[string][][2]strin
 		FileTypes: append([]string{}, p.FileTypes...),
 		Fail:      s.Fail,
 	})
-	if err != nil {
+}
+
+// writeStub writes the stub and its spec into stageDir.
+func writeStub(stageDir string, s stubSpec) error {
+	if err := os.MkdirAll(stageDir, dirPerm); err != nil {
+		return fmt.Errorf("create stage dir: %w", err)
+	}
+
+	var spec bytes.Buffer
+
+	enc := json.NewEncoder(&spec)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+
+	if err := enc.Encode(s); err != nil {
 		return fmt.Errorf("encode spec: %w", err)
 	}
 
