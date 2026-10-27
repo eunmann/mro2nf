@@ -160,20 +160,20 @@ func readValues(path string) ([]string, error) {
 	return strings.Fields(string(raw)), nil
 }
 
-// write resolves the instance and its args from its staged upstream outs,
-// the outs it got as values and its fork elements, its file leaves linked
-// below out to the staged files, those named by reference among refs.
-func (a *argsFlags) write(g *cg.Graph, out string, refs shim.Refs) (cg.Instance, core.LazyArgumentMap, error) {
+// spec is the instance's args spec: its staged upstream outs, the outs it
+// got as values and its fork elements, its file leaves linked below out to
+// the staged files, those named by reference among refs.
+func (a *argsFlags) spec(g *cg.Graph, out string, refs shim.Refs) (cg.ArgsSpec, error) {
 	values, err := readValues(a.values)
 	if err != nil {
-		return cg.Instance{}, nil, fmt.Errorf("args: %w", err)
+		return cg.ArgsSpec{}, fmt.Errorf("args: %w", err)
 	}
 
 	forks := make([]cg.Element, len(a.forks))
 	for i, rec := range a.forks {
 		el, err := g.DecodeElement(rec)
 		if err != nil {
-			return cg.Instance{}, nil, fmt.Errorf("args: %w", err)
+			return cg.ArgsSpec{}, fmt.Errorf("args: %w", err)
 		}
 
 		forks[i] = el
@@ -181,11 +181,14 @@ func (a *argsFlags) write(g *cg.Graph, out string, refs shim.Refs) (cg.Instance,
 
 	files, err := stagedEntryFiles(g, a.leaves)
 	if err != nil {
-		return cg.Instance{}, nil, fmt.Errorf("args: %w", err)
+		return cg.ArgsSpec{}, fmt.Errorf("args: %w", err)
 	}
 
-	spec := cg.ArgsSpec{Node: a.node, In: a.in, Values: values, Refs: refs, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots}
+	return cg.ArgsSpec{Node: a.node, In: a.in, Values: values, Refs: refs, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots}, nil
+}
 
+// writeArgs resolves the instance and its args from spec.
+func writeArgs(g *cg.Graph, spec cg.ArgsSpec) (cg.Instance, core.LazyArgumentMap, error) {
 	inst, args, err := g.WriteArgs(spec)
 	if err != nil {
 		return cg.Instance{}, nil, fmt.Errorf("args: %w", err)
@@ -249,10 +252,10 @@ func (p *postFlags) register(fs *flag.FlagSet) {
 // post posts the finished instance's outs, done, field by field, and
 // writes the fork elements of every root it feeds and the gates it sets,
 // naming by reference each file the outs name that is a whole leaf of a
-// bundle in staged.
-func (p *postFlags) post(g *cg.Graph, inst cg.Instance, done finished, staged shim.Staged) error {
+// bundle in staged. args is what the instance's args were resolved from.
+func (p *postFlags) post(g *cg.Graph, inst cg.Instance, done finished, staged shim.Staged, args cg.ArgsSpec) error {
 	spec := cg.PostSpec{
-		Instance: inst, Outs: done.outs, Opts: done.opts, Staged: staged,
+		Instance: inst, Outs: done.outs, Args: args, Opts: done.opts, Staged: staged,
 		Forks: p.forks, ForkValues: p.forkValues, ForkRefs: p.forkRefs, Fields: p.fields, Values: p.values, FieldRefs: p.fieldRefs, Gates: p.gates,
 	}
 	if err := g.Post(spec); err != nil {

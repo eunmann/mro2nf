@@ -20,7 +20,7 @@ type resolved struct {
 // (resolve.go:604): an instance is given only its own element's upstream
 // outs. It is the element the task staged (Store.SplitElement), the element
 // of a stage output's collection decoded once, or one element of a literal
-// collection within any gates; false where none applies.
+// collection or of a merge within any gates; false where none applies.
 func (top *TopNode) splitElement(binding *syntax.SplitExp, t syntax.Type,
 	fork ForkId, part *ForkSourcePart, readSize int64,
 ) (resolved, bool) {
@@ -43,7 +43,7 @@ func (top *TopNode) splitElement(binding *syntax.SplitExp, t syntax.Type,
 		return top.refElement(binding, ref, t, fork, part, readSize)
 	}
 
-	return top.literalElement(binding.Value, t, fork, part.Id, readSize)
+	return top.expElement(binding.Value, t, fork, part.Id, readSize)
 }
 
 // collectionKey names a collection a split reads from a stage output: the
@@ -167,9 +167,13 @@ func decodeCollection(v json.Marshaler, mode syntax.CallMode) (json.Marshaler, b
 	return a, true
 }
 
-// literalElement resolves the element at ix of a literal collection v, null
-// where a gate around it disables it; false where v is no literal.
-func (top *TopNode) literalElement(v syntax.Exp, t syntax.Type, fork ForkId,
+// expElement resolves the element at ix of v, a literal collection or a
+// merge over a call's forks, null where a gate around it disables it;
+// false where v is neither. A merge's element is its value at the fork of
+// its call at ix, as Martian specializes a split of a merge
+// (syntax/split_expression.go:450), which it does not do through a gate
+// (syntax/disabled_exp.go:69).
+func (top *TopNode) expElement(v syntax.Exp, t syntax.Type, fork ForkId,
 	ix syntax.CollectionIndex, readSize int64,
 ) (resolved, bool) {
 	switch x := v.(type) {
@@ -193,7 +197,23 @@ func (top *TopNode) literalElement(v syntax.Exp, t syntax.Type, fork ForkId,
 			return resolved{ready: ready, err: err}, true
 		}
 
-		return top.literalElement(x.Value, t, fork, ix, readSize)
+		return top.expElement(x.Value, t, fork, ix, readSize)
+	case *syntax.MergeExp:
+		at := fork.SourceIndexMap()
+		if at == nil {
+			at = map[*syntax.CallStm]syntax.CollectionIndex{}
+		}
+
+		at[x.GetCall()] = ix
+
+		e, err := x.BindingPath("", at, top.types)
+		if err != nil {
+			return resolved{ready: true, err: err}, true
+		}
+
+		ready, out, err := top.resolve(e, t, fork, readSize)
+
+		return resolved{ready: ready, v: out, err: err}, true
 	default:
 		return resolved{}, false
 	}

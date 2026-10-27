@@ -1,0 +1,72 @@
+# #661: a map call splits the return of a sub-pipeline a stage's output
+# disables, which itself splits the output of its own stage. RUN's gate holds
+# it enabled, so CONSUME_RUN forks over its ys; SKIP's holds it disabled, so
+# its ys are null and CONSUME_SKIP has no forks.
+stage FLAG(
+    in  bool value,
+    out bool off,
+    src py   "stages/flag",
+)
+
+stage KEYS(
+    out int[] xs,
+    src py    "stages/keys",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline INNER(
+    out int[] ys,
+)
+{
+    call KEYS()
+
+    map call WORK(
+        x = split KEYS.xs,
+    )
+
+    return (
+        ys = WORK.y,
+    )
+}
+
+pipeline TOP(
+    out int[] run,
+    out int[] skip,
+)
+{
+    call FLAG as ON(
+        value = false,
+    )
+
+    call FLAG as OFF(
+        value = true,
+    )
+
+    call INNER as RUN() using (
+        disabled = ON.off,
+    )
+
+    call INNER as SKIP() using (
+        disabled = OFF.off,
+    )
+
+    map call WORK as CONSUME_RUN(
+        x = split RUN.ys,
+    )
+
+    map call WORK as CONSUME_SKIP(
+        x = split SKIP.ys,
+    )
+
+    return (
+        run  = CONSUME_RUN.y,
+        skip = CONSUME_SKIP.y,
+    )
+}
+
+call TOP()

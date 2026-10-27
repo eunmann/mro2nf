@@ -36,6 +36,11 @@ type PostSpec struct {
 	// wrote it or was given it.
 	Instance Instance
 	Outs     core.LazyArgumentMap
+	// Args is what the instance's args were resolved from, what its task
+	// staged. Of it the post reads only the outs of the nodes a disable
+	// gate reads that mrp evaluates expanding the forks of a root this
+	// stage feeds (postGates).
+	Args ArgsSpec
 	// Opts are how the post treats the files the outs name: confined as the
 	// job's own (Confine), and those under the run's read-only roots named
 	// as the paths they are (Roots).
@@ -93,7 +98,8 @@ func (g *Graph) Post(spec PostSpec) error {
 }
 
 // posting is the store of the posted instance's outs, checked as mrp
-// checks them.
+// checks them, and of the outs of its gates' nodes its task staged
+// (postGates).
 func (g *Graph) posting(spec PostSpec) (*stagedStore, error) {
 	in := spec.Instance
 
@@ -109,12 +115,65 @@ func (g *Graph) posting(spec PostSpec) (*stagedStore, error) {
 
 	s.addOuts(in, spec.Outs)
 
+	if err := g.addGateOuts(s, spec); err != nil {
+		return nil, err
+	}
+
 	r := &resolver{g: g, st: s}
 	if err := r.verifyOutput(st, in.Fork); err != nil {
 		return nil, err
 	}
 
 	return s, nil
+}
+
+// postGates are the nodes, other than node, a disable gate reads that mrp
+// evaluates expanding the forks of a root node feeds (core/fork.go:1467,
+// 1541 getDisabledSource). A count drops such a gate from the stages
+// fixing the forks only where it disables node too (countWalk.exp), so
+// node's task stages the gate's outs to resolve node's own.
+func (g *Graph) postGates(node string) []string {
+	var out []string
+
+	for _, root := range g.fedBy(node) {
+		for _, gate := range g.rootCount(root).gates {
+			out = union(out, refIDs(gate))
+		}
+	}
+
+	return slices.DeleteFunc(out, func(id string) bool { return id == node })
+}
+
+// addGateOuts adds to s each instance of a postGates node whose outs the
+// task staged (spec.Args).
+func (g *Graph) addGateOuts(s *stagedStore, spec PostSpec) error {
+	nodes := g.postGates(spec.Instance.Node)
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	up, err := g.stage(spec.Args.In, spec.Args.Values, spec.Args.Refs)
+	if err != nil {
+		return fmt.Errorf("post gates: %w", err)
+	}
+
+	for _, id := range nodes {
+		st, err := g.Stage(id)
+		if err != nil {
+			return err
+		}
+
+		for _, f := range up.forks[id] {
+			outs, err := up.outs(st, f)
+			if err != nil {
+				return fmt.Errorf("post gates: %w", err)
+			}
+
+			s.addOuts(Instance{Node: id, Fork: f}, outs)
+		}
+	}
+
+	return nil
 }
 
 // writeForks writes the posted instance's fork and partner elements, each
