@@ -128,6 +128,24 @@ func TestPlanRefusesOverridesMrpRefuses(t *testing.T) {
 	}
 }
 
+// TestPlanRefusesProfileMrpRefuses: a run profile mode no profile names
+// fails the run at its start with mrp's message, as mrp refuses to start
+// (core/jobmanager.go:166-172); disable and every profile's mode plan.
+func TestPlanRefusesProfileMrpRefuses(t *testing.T) {
+	fx := fixtureDir(t, "overrides_resources")
+
+	_, err := planEntry(t, fx, "{}", "-profile", "bogus")
+	if want := "invalid profile mode: bogus. Valid profile modes: cpu, line, mem, perf, pyflame, pyspy"; !errors.Is(err, job.ErrProfile) || !strings.Contains(err.Error(), want) {
+		t.Errorf("plan with profile bogus: %v, want an error naming %q", err, want)
+	}
+
+	for _, mode := range []string{"disable", "cpu", "line", "mem", "perf", "pyflame", "pyspy"} {
+		if _, err := planEntry(t, fx, "{}", "-profile", mode); err != nil {
+			t.Errorf("plan with profile %s: %v", mode, err)
+		}
+	}
+}
+
 // TestPlanRefusesPsidMrpRefuses: a psid mrp refuses (cmd/mrp/main.go:494
 // util.ValidateID), such as one with a '.' that would shift the prefix
 // Martian strips from every fqname an override matches, fails the run at

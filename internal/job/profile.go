@@ -1,6 +1,12 @@
 package job
 
 import (
+	"cmp"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+
 	"github.com/martian-lang/martian/martian/core"
 )
 
@@ -52,15 +58,38 @@ func Profiles() map[core.ProfileMode]*core.ProfileConfig {
 	}
 }
 
+// ErrProfile is a run profile mode no profile names.
+var ErrProfile = errors.New("invalid profile mode")
+
+// CheckProfile refuses a run profile mode, mrp's --profile, that neither
+// disables profiling nor names a profile, as mrp refuses to start
+// (core/jobmanager.go:166-172 getJobConfig). mrp checks no mode an
+// overrides key sets.
+func CheckProfile(mode core.ProfileMode) error {
+	profiles := Profiles()
+	if _, ok := profiles[mode]; ok || mode == "" || mode == core.DisableProfile {
+		return nil
+	}
+
+	names := make([]string, 0, len(profiles))
+	for m := range profiles {
+		names = append(names, string(m))
+	}
+
+	slices.Sort(names)
+
+	return fmt.Errorf("%w: %s. Valid profile modes: %s", ErrProfile, mode, strings.Join(names, ", "))
+}
+
 // profile sets info's profile_mode and profile_config as mrp's runJob does
 // (core/node.go:1177-1193): the mode is the one the nearest overrides key
-// on the job's node sets for its phase, else the run's, disable
+// on the job's node sets for its phase, else the run's, by default disable
 // (core/node.go:1099 getProfileMode, core/runtime.go:185); its config is
 // the profile of that name, or of the run's mode for an empty one
 // (core/runtime.go:651 ProfileConfig), none for disable or a mode no
 // profile names, and a config's adapter mode replaces the mode.
 func (r Runtime) profile(j *job, info *core.JobInfo) {
-	run := core.DisableProfile
+	run := cmp.Or(r.Profile, core.DisableProfile)
 
 	info.ProfileMode = r.Overrides.GetProfile(j.node, stageType(j.shell), run)
 

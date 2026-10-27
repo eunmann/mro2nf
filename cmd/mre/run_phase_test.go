@@ -177,6 +177,41 @@ func TestStageUnderOverrides(t *testing.T) {
 	}
 }
 
+// TestStageProfile: -profile, mrp's --profile, sets the profile mode and
+// config of a job no overrides key sets one for, and a key's mode wins
+// over it, as under mrp --profile=mem with the same overrides.
+func TestStageProfile(t *testing.T) {
+	dir, work := writeSQ(t), t.TempDir()
+	over := writeTestFile(t, filepath.Join(work, "overrides.json"), `{"P.SQ": {"split.profile": "disable"}}`)
+
+	for _, tc := range []struct {
+		name, mode string
+		overrides  []string
+		config     bool
+	}{
+		{"run's", "mem", nil, true},
+		{"key's", "disable", []string{"-overrides", over}, false},
+	} {
+		jw := filepath.Join(work, tc.name)
+		argv := append([]string{
+			"stage", "-phase", "split", "-node", "P.SQ", "-args", filepath.Join(jw, "args"), "-profile", "mem",
+			"-o", filepath.Join(jw, "chunks"), "-out-refs", filepath.Join(jw, "chunk_refs"), "-work", jw,
+		}, tc.overrides...)
+		if _, err := runSQ(t, dir, argv...); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		var info map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(readText(t, filepath.Join(jw, "split", "_jobinfo"))), &info); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, config := info["profile_config"]; string(info["profile_mode"]) != `"`+tc.mode+`"` || config != tc.config {
+			t.Errorf("under the %s mode: _jobinfo profile_mode %s, profile_config %t; want %q, %t", tc.name, info["profile_mode"], config, tc.mode, tc.config)
+		}
+	}
+}
+
 // TestStageJobRefusals: mre stage refuses, before it runs any stage code,
 // an instance its args resolve disabled, in every phase; a phase the stage
 // has no job for; an unknown phase; and a py job whose work dir cannot

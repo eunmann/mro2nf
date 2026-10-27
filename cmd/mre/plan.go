@@ -33,7 +33,7 @@ var errBuild = errors.New("the project and mre are different mro2nf builds")
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, leaves, files, work string
 	overrides, psid, s3Mount, runWork, codeMropath, pipelines       string
-	build                                                           string
+	build, profile                                                  string
 	hostInputs, hostInPlace, remoteInputs                           bool
 	local                                                           job.Pool
 }
@@ -44,6 +44,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null sets the input to null, and an input it leaves out keeps the transpiled value")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
+	fs.StringVar(&f.profile, "profile", "", "the run's mrp --profile, which must disable profiling or name a profile")
 	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
 	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the gzip of the call as mrp's invocation generator builds it")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
@@ -83,20 +84,8 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if f.entry == "" {
-		return errNoEntry
-	}
-
-	if mine := buildinfo.Version(version); f.build != mine {
-		return fmt.Errorf("plan: %w: project transpiled by %s, mre is %s; run the project with the mre of the build that transpiled it, or transpile it again with this build's mro2nf", errBuild, f.build, mine)
-	}
-
-	if err := util.ValidateID(f.psid); err != nil {
-		return fmt.Errorf("plan: psid: %w", err)
-	}
-
-	if err := f.local.Check(); err != nil {
-		return fmt.Errorf("plan: %w", err)
+	if err := f.checkRun(); err != nil {
+		return err
 	}
 
 	over, err := readOverrides(f.overrides)
@@ -139,6 +128,33 @@ func runPlan(_ context.Context, argv []string) error {
 	}
 
 	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over, Local: f.local})
+}
+
+// checkRun refuses a project another build transpiled, and a run mrp
+// would not start: one with no entry, or a psid, pool or profile mode mrp
+// refuses.
+func (f *planFlags) checkRun() error {
+	if f.entry == "" {
+		return errNoEntry
+	}
+
+	if mine := buildinfo.Version(version); f.build != mine {
+		return fmt.Errorf("plan: %w: project transpiled by %s, mre is %s; run the project with the mre of the build that transpiled it, or transpile it again with this build's mro2nf", errBuild, f.build, mine)
+	}
+
+	if err := util.ValidateID(f.psid); err != nil {
+		return fmt.Errorf("plan: psid: %w", err)
+	}
+
+	if err := f.local.Check(); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+
+	if err := job.CheckProfile(core.ProfileMode(f.profile)); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+
+	return nil
 }
 
 // vetLeaves refuses an entry file value the run may not read: one under

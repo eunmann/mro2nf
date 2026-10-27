@@ -70,6 +70,7 @@ func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.rt.Adapters, "adapters", "", "Martian's adapters dir (default: the adapters mre embeds)")
 	fs.StringVar(&f.rt.Mrjob, "mrjob", "", "the mrjob binary py and comp stages run under (default: the mrjob beside mre)")
 	fs.BoolVar(&f.rt.Monitor, "monitor", false, "mrp --monitor: mrjob enforces the job's memory and thread limits")
+	fs.StringVar((*string)(&f.rt.Profile), "profile", "", "mrp --profile: the profile mode of a job no overrides key sets one for (default: disable)")
 	fs.StringVar(&f.rt.PSID, "psid", "", "the pipestance id job names carry")
 	fs.StringVar(&f.rt.UUID, "uuid", "", "the run's pipestance uuid, which every job's environment holds as MRO_UUID")
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
