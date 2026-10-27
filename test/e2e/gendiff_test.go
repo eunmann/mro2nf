@@ -55,6 +55,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -348,6 +349,39 @@ func TestGenDiffSkipsRefusedShape(t *testing.T) {
 	errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
 	if skip == "" {
 		t.Errorf("transpileGenLegs = %v, want a skip for the refused shape", errs)
+	}
+}
+
+// TestGenDiffSkipsPlanRefusal pins planRefusal: a run whose PLAN failed
+// refusing the shape is no test, as a refusal at transpile time is, and a
+// PLAN that failed otherwise, or a stage that failed, refuses nothing.
+func TestGenDiffSkipsPlanRefusal(t *testing.T) {
+	const refused = "mre: plan: unsupported call graph shape: TOP.W has a disable binding over its forks"
+
+	cases := []struct {
+		name, trace, stderr, want string
+	}{
+		{"refused", "60/4010e7\tPLAN\tFAILED\t1\n", refused, refused},
+		{"plan_failed_otherwise", "60/4010e7\tPLAN\tFAILED\t1\n", "mre: plan: read values.json: no such file", ""},
+		{"stage_failed", "60/4010e7\tPLAN\tCOMPLETED\t0\n61/000000\tP:N0_W (1)\tFAILED\t1\n", refused, ""},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			proj := t.TempDir()
+			writeTestFile(t, filepath.Join(proj, "trace.txt"), "hash\tname\tstatus\texit\n"+c.trace)
+			writeTestFile(t, filepath.Join(proj, "work", "60", "4010e7aa", ".command.err"), c.stderr+"\n")
+			writeTestFile(t, filepath.Join(proj, "work", "61", "000000aa", ".command.err"), c.stderr+"\n")
+
+			got, err := planRefusal(proj)
+			if err != nil || got != c.want {
+				t.Errorf("planRefusal = %q, %v; want %q", got, err, c.want)
+			}
+		})
+	}
+
+	if got, err := planRefusal(t.TempDir()); err != nil || got != "" {
+		t.Errorf("planRefusal of a run with no trace = %q, %v; want none", got, err)
 	}
 }
 
@@ -750,6 +784,10 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 			return genVerdict{}, fmt.Errorf("leg %s: %w", leg.name, err)
 		}
 
+		if lv.skip != "" {
+			return lv, nil
+		}
+
 		v.findings = append(v.findings, lv.findings...)
 		v.notes = append(v.notes, lv.notes...)
 	}
@@ -779,6 +817,44 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 
 func genLegProj(work string, leg genLeg) string { return filepath.Join(work, "nf-"+leg.name) }
 
+// planRefusal is the error with which the failed run of proj's PLAN
+// refused the call graph as a shape mro2nf does not wire, which it can tell
+// only from the launch values, as transpileGenLegs's refusals are told from
+// the source; "" when PLAN refused nothing.
+func planRefusal(proj string) (string, error) {
+	rows, err := parseTrace(filepath.Join(proj, "trace.txt"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	for _, r := range rows {
+		if r.Name != "PLAN" || r.Status != "FAILED" {
+			continue
+		}
+
+		errs, err := filepath.Glob(filepath.Join(proj, "work", r.Hash+"*", ".command.err"))
+		if err != nil {
+			return "", fmt.Errorf("glob PLAN stderr: %w", err)
+		}
+
+		for _, path := range errs {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read PLAN stderr: %w", err)
+			}
+
+			if strings.Contains(string(raw), cg.ErrShapeUnsupported.Error()) {
+				return strings.TrimSpace(string(raw)), nil
+			}
+		}
+	}
+
+	return "", nil
+}
 
 // isStageDir reports whether name is a stage of the fixture at dir, rather
 // than a pipeline: mrp records its own failures resolving a pipeline's
@@ -802,6 +878,13 @@ func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOu
 	fixture := filepath.Base(dir)
 	runErr := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-with-trace", "trace.txt")...)
 	recovered := errors.Is(runErr, errFailedAttempt)
+
+	if runErr != nil && !recovered {
+		refusal, err := planRefusal(proj)
+		if err != nil || refusal != "" {
+			return genVerdict{skip: fmt.Sprintf("mro2nf's PLAN rejects it as unsupported (%s leg): %s", leg.name, refusal)}, err
+		}
+	}
 
 	if (runErr != nil && !recovered) || mrp.Failed {
 		failure := runErr
