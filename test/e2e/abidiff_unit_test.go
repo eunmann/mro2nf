@@ -235,6 +235,46 @@ func TestHashDirTree(t *testing.T) {
 	}
 }
 
+// TestHashDirTreeFollowsDirLinks: a link inside a tree to a directory hashes
+// as the directory its reader lists through it, so mrp's tree, which keeps
+// the link, and mro2nf's copy, which holds the directory, hash alike (#665).
+// A link back to an ancestor has no finite tree and fails.
+func TestHashDirTreeFollowsDirLinks(t *testing.T) {
+	linked := t.TempDir()
+	writeTestFile(t, filepath.Join(linked, "sub", "inner.txt"), "inner")
+
+	if err := os.Symlink("sub", filepath.Join(linked, "sub_link")); err != nil {
+		t.Fatal(err)
+	}
+
+	copied := t.TempDir()
+	writeTestFile(t, filepath.Join(copied, "sub", "inner.txt"), "inner")
+	writeTestFile(t, filepath.Join(copied, "sub_link", "inner.txt"), "inner")
+
+	a, err := hashDirTree(linked)
+	if err != nil {
+		t.Fatalf("hash the tree holding the link: %v", err)
+	}
+
+	b, err := hashDirTree(copied)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if a != b {
+		t.Errorf("a link to a directory hashes %s, its copy %s; want equal", a, b)
+	}
+
+	cycle := t.TempDir()
+	if err := os.Symlink(".", filepath.Join(cycle, "loop")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := hashDirTree(cycle); !errors.Is(err, errTreeCycle) {
+		t.Errorf("a tree linking to its own root hashes with %v, want %v", err, errTreeCycle)
+	}
+}
+
 // TestABINormalizeKeyRules checks ignore-key and ceil-number touch only the
 // named top-level key of the named file.
 func TestABINormalizeKeyRules(t *testing.T) {

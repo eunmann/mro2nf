@@ -1,0 +1,33 @@
+# A directory output holding a subdirectory and a relative link to it, which
+# a downstream stage lists and reads through the link (#665). mrp hands the
+# reader the directory as its producer wrote it, link and all.
+stage MKDIR(
+    out path d,
+    src py   "stages/mkdir",
+)
+
+stage READ(
+    in  path   d,
+    out string names,
+    out string inner,
+    src py     "stages/read",
+)
+
+pipeline DLD(
+    out string names,
+    out string inner,
+)
+{
+    call MKDIR()
+
+    call READ(
+        d = MKDIR.d,
+    )
+
+    return (
+        names = READ.names,
+        inner = READ.inner,
+    )
+}
+
+call DLD()

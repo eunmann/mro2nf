@@ -373,6 +373,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #624: a link that reaches nothing inside a directory output reaches its
 	// reader, from the producer's bundle and from a copy of it.
 	{name: "dir_dangling_link", cloud: true},
+	// #665: a link to a subdirectory inside a directory output reaches its
+	// reader, from the producer's bundle and from a copy of it.
+	{name: "dir_link_dir", cloud: true},
 	// #328: string values shaped like @mre: markers reach the stage and the
 	// published outs exactly as mrp gives them.
 	{name: "marker_strings"},
