@@ -239,6 +239,8 @@ func TestMrpOutcomeCaseValidate(t *testing.T) {
 		{"divergence not in the allowlist", mrpOutcomeCase{name: "f", mrp: boom, divergence: "gone"}, nil, true},
 		{"divergence with no outcome matcher", mrpOutcomeCase{name: "f", mrp: boom, divergence: "by-stage"}, nil, true},
 		{"divergence equal to mrp", mrpOutcomeCase{name: "f", mrp: boom, divergence: "nf-asserts"}, nil, true},
+		{"retries under autoretry", mrpOutcomeCase{name: "f", mrp: boom, autoretry: 1, retries: 1}, nil, false},
+		{"retries beyond autoretry", mrpOutcomeCase{name: "f", mrp: boom, autoretry: 1, retries: 2}, nil, true},
 	}
 
 	for _, c := range cases {
@@ -259,28 +261,34 @@ func TestMrpOutcomeCaseValidate(t *testing.T) {
 // attempts of a stage_raise run: the checked-in allowlist excuses the
 // stage-and-kind comparison, and removing its entry fails the case. RAISE is
 // a stage exception, which mrp does not retry, so a run that attempted it
-// twice fails the case, whatever the allowlist.
+// twice fails the case, whatever the allowlist, unless the run has a
+// transient failure of it to retry, and then a third attempt fails it.
 func TestOutcomeRulesNeedTheirEntries(t *testing.T) {
 	once := []string{"PLAN", "N0_RAISE (SR.RAISE)"}
 	retried := []string{"PLAN", "N0_RAISE (SR.RAISE)", "N0_RAISE (SR.RAISE)"}
+	thrice := []string{"PLAN", "N0_RAISE (SR.RAISE)", "N0_RAISE (SR.RAISE)", "N0_RAISE (SR.RAISE)"}
 	allow := mustAllowlist(t)
 
-	if got := outcomeRuleReports(allow, "stage_raise", once); len(got) != 0 {
-		t.Errorf("the checked-in allowlist leaves reports: %q", got)
+	for retries, attempts := range [][]string{once, retried} {
+		if got := outcomeRuleReports(allow, "stage_raise", attempts, retries); len(got) != 0 {
+			t.Errorf("%d retries: the checked-in allowlist leaves reports: %q", retries, got)
+		}
 	}
 
 	cases := []struct {
 		name     string
 		allow    divergence.Allowlist
 		attempts []string
+		retries  int
 		want     string
 	}{
-		{"stage_entry_removed", allow.Without("failure-report-details"), once, "reads only each failure's stage and kind"},
-		{"retried", allow, retried, "attempted N0_RAISE (SR.RAISE) more than once"},
+		{"stage_entry_removed", allow.Without("failure-report-details"), once, 0, "reads only each failure's stage and kind"},
+		{"retried", allow, retried, 0, "retried N0_RAISE (SR.RAISE) more than 0 times"},
+		{"retried_twice", allow, thrice, 1, "retried N0_RAISE (SR.RAISE) more than 1 times"},
 	}
 
 	for _, c := range cases {
-		got := outcomeRuleReports(c.allow, "stage_raise", c.attempts)
+		got := outcomeRuleReports(c.allow, "stage_raise", c.attempts, c.retries)
 		if len(got) != 1 || !strings.Contains(got[0], c.want) {
 			t.Errorf("%s: reports %q, want one containing %q", c.name, got, c.want)
 		}

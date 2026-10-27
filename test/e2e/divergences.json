@@ -59,7 +59,7 @@
       "kind": "outcome",
       "feature": "pipeline outs publishing a directory holding a link its stage wrote that reaches nothing",
       "summary": "When the outs publish a directory holding a link its stage wrote that reaches nothing, mrp publishes the link as the stage wrote it, and the run succeeds; mro2nf fails the run loudly, naming the link. A stage reading the directory sees the link under both, with the target the stage gave it.",
-      "justification": "The run publishes copies (Nextflow's `mode 'copy'`), and a copy of a link that reaches nothing has nothing to copy: Nextflow 26.04 fails such a publish with `NoSuchFileException`, an upload to S3 skips the link (`aws s3 cp` exits 2), and an object store holds no link. So a results dir cannot hold it, as with `dir-and-inner-file`, and publishing the directory without it would change the published tree silently.",
+      "justification": "The run publishes copies (Nextflow's `mode 'copy'`), and Nextflow 26.04 fails the copy of a link that reaches nothing with `NoSuchFileException`; an object store such as S3 holds no link (`aws s3 cp` skips it, exiting 2). Recreating the link only where `results/` is a filesystem would make the outcome depend on the profile, so every profile fails alike; publishing the directory without the link would change the published tree silently.",
       "evidence": ["TestMrpDiffFailureParity/dir_dangling_link_out", "TestWriteOutsRefusesAStageDanglingLink", "TestMrpDiff/dir_dangling_link", "TestRemovingAnOutcomeEntryFailsItsCase"],
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
@@ -107,6 +107,15 @@
       "justification": "Every entry input is a launch param, which main.nf's params block declares by name, and Nextflow's v2 script grammar accepts no such name there, quoted or not: `paramDeclaration` takes an `identifier`, which excludes the words its lexer reads as keywords, such as `def` and `new`, and `checkInvalidVarName` refuses the Groovy keywords it does lex as names, such as `class` (nf-lang `ScriptParser.g4`, `ScriptLexer.g4`, `ScriptAstBuilder.java`, v26.04.0 to v26.04.7). Renaming the param would change the name a launch sets it by.",
       "evidence": ["TestMrpDiffFailureParity/keyword_input", "TestEmitRefusesKeywordInput", "TestNextflowKeyword", "TestRemovingAnOutcomeEntryFailsItsCase"],
       "outcome": {"failed": true}
+    },
+    {
+      "id": "stage-deletes-input",
+      "kind": "outcome",
+      "feature": "a retried stage that deleted its file input",
+      "summary": "Martian's retry tests have a stage delete its file input, then fail transiently. mrp's retry (`--autoretry`) passes the stage the deleted file's path again, and the stage, finding nothing to delete, succeeds. Under mro2nf (`process.maxRetries`) the input may link to the file in its producer's task dir, which the deletion then removes, so the retry fails loudly before the stage runs, naming the missing staged leaf.",
+      "justification": "Martian's docs say stages should never alter their inputs and must behave correctly if re-run (martian-docs `content/writing-stages/index.md`), and the tests' stage code says it breaks that rule. Giving each retry fresh copies of what it stages would copy every staged input on every retry.",
+      "evidence": ["TestMrpDiffFailureParity/retry_test", "TestMrpDiffFailureParity/retry_map_call_map_test", "TestNextflowOutcomeCountsLastAttempts", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
     {
       "id": "local-modifier-ignored",
