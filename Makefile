@@ -126,18 +126,22 @@ test-cellranger: build ## Real-CellRanger differential baseline (opt-in; set CEL
 	$(GO_E2E) -timeout 30m -run '^TestCellRanger'
 
 # The corpus sweeps (#653) over the pipelines whose MROPATH CORPUS is, beside
-# the vendored corpus: Martian's verdicts, the call-graph sweeps and the
-# Nextflow lint. The nightly runs it on the AGPL repos it fetches; locally it
-# runs on what you point it at, such as a licensed Cell Ranger install's mro
-# dir, which never enters CI. Its roots are made absolute, as each test reads
-# them from its own package's dir.
+# the vendored corpus: Martian's verdicts, the call-graph sweeps, the
+# Nextflow lint, and the stub differential (#654) of CORPUS's own
+# invocations, whose subtests are named external_. The nightly runs it on
+# the AGPL repos it fetches; locally it runs on what you point it at, such
+# as a licensed Cell Ranger install's mro dir, which never enters CI. Its
+# roots are made absolute, as each test reads them from its own package's
+# dir.
+CORPUS_STUB_TIMEOUT ?= 60m
 CORPUS_SWEEPS := ^(TestWitnessCoversLiteral|TestStandInRunOfEveryFixture|TestStandInStagesOnlyWhatItReads|TestSplitCallsAreMartians)$$
-test-corpus: build ## Corpus sweeps and nextflow lint over CORPUS=<mropath> (opt-in; e.g. your own Cell Ranger install's mro dir)
+test-corpus: build ## Corpus sweeps, nextflow lint and stub differential over CORPUS=<mropath> (opt-in; e.g. your own Cell Ranger install's mro dir)
 	@test -n '$(CORPUS)' || { echo 'test-corpus: set CORPUS to the MROPATH of the pipelines to sweep'; exit 1; }
 	export MRO2NF_CORPUS='$(subst $(eval) ,:,$(abspath $(subst :, ,$(CORPUS))))'; \
 	go test -count=1 -v -run '^TestCorpusReport$$' ./test/corpus/ && \
 	go test -count=1 -run '$(CORPUS_SWEEPS)' ./internal/cg/ && \
-	$(GO_E2E) -timeout 30m -run '^TestNextflowLint$$'
+	$(GO_E2E) -timeout 30m -run '^TestNextflowLint$$' && \
+	$(GO_E2E) -timeout $(CORPUS_STUB_TIMEOUT) -run '^TestCorpusStubDiff$$/^external_'
 
 vet: ## Run go vet
 	go vet ./...
