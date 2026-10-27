@@ -533,6 +533,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "default_out"},
 	{name: "disabled_callref"},
 	{name: "disabled_entry_skip"},
+	// #666: a map call over a stage's outs, disabled by a binding over the
+	// forks of an enclosing map call.
+	{name: "disabled_fed_root"},
 	{name: "disabled_map"},
 	{name: "disabled_map_ref"},
 	{name: "fanin"},

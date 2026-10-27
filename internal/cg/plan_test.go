@@ -198,6 +198,78 @@ func BenchmarkPlanEntry(b *testing.B) {
 	}
 }
 
+// TestPlanDisablesOnTheRootsTheBindingVariesWith (#666): PLAN decides a
+// disable binding that reads no stage on the roots it is forked on, which
+// the entry fixes, though its node is forked on a root whose forks a stage
+// fixes too: disabled_fed_root's WORK_INT, by its fork of TOP.INNER, at the
+// literal; the Martian test's DELAY and WORK_INT, by their fork of TOP.MID,
+// at its witness, as mrp resolves the binding at each fork
+// (core/stage.go:883 Fork.disabled).
+func TestPlanDisablesOnTheRootsTheBindingVariesWith(t *testing.T) {
+	type off struct {
+		At    []string
+		Roots []int
+	}
+
+	cases := []struct {
+		mro     string
+		witness bool
+		want    map[string]off
+	}{
+		{
+			mro:  filepath.Join("..", "..", "testdata", "disabled_fed_root", "pipeline.mro"),
+			want: map[string]off{"TOP.INNER.WORK_INT": {At: []string{"0", "2"}, Roots: []int{0}}},
+		},
+		{
+			mro:     filepath.Join("..", "..", "testdata", "corpus", "martian", "martian", "core", "testdata", "map_call_disabled_by_split.mro"),
+			witness: true,
+			want: map[string]off{
+				"TOP.MID.INNER.DELAY":    {At: []string{"0"}, Roots: []int{0}},
+				"TOP.MID.INNER.WORK_INT": {At: []string{"0"}, Roots: []int{0}},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		paths := []string{filepath.Dir(tc.mro)}
+
+		src, err := ReadSource(tc.mro, paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inv := src.Invocation
+
+		if tc.witness {
+			w, _, err := src.Witness(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if inv, err = w.Invocation(); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		p, err := MakePlan(src, inv, paths, t.TempDir(), ReadInPlace{Host: true})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.mro, err)
+		}
+
+		got := map[string]off{}
+
+		for _, n := range p.Nodes {
+			if n.OffAt != nil || n.OffRoots != nil {
+				got[n.Fqid] = off{At: n.OffAt, Roots: n.OffRoots}
+			}
+		}
+
+		if diff := cmp.Diff(tc.want, got); diff != "" {
+			t.Errorf("%s: instances PLAN disables (-want +plan):\n%s", tc.mro, diff)
+		}
+	}
+}
+
 // readersMRO maps PAIR over A.xs beside a second SRC, B, with PAIR's input b
 // bound to b and its disable binding to gate.
 func readersMRO(b, gate string) string {

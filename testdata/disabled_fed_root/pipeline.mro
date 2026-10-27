@@ -1,0 +1,77 @@
+# #666, after Martian's core/testdata/map_call_disabled_by_split.mro:
+# INNER's WORK_INT is forked on DELAY's outs and on the map call over INNER,
+# whose fork disables it at 0 and 2 and not at 1. mrp decides each WORK_INT
+# fork from its fork of the map call over INNER (core/stage.go Fork.disabled)
+# and runs no job for a disabled one. DELAY and SUM_MAP run at every fork.
+stage PASS_MAP(
+    in  map<int> what,
+    out map<int> result,
+    src py       "stages/pass",
+)
+
+stage WORK_INT(
+    in  int what,
+    out int result,
+    src py  "stages/work_int",
+)
+
+stage SUM_MAP(
+    in  map<int> what,
+    out int      total,
+    src py       "stages/sum",
+)
+
+pipeline INNER(
+    in  map<int> inputs,
+    in  bool     disable,
+    out map<int> result,
+    out int      total,
+)
+{
+    call PASS_MAP as DELAY(
+        what = self.inputs,
+    )
+
+    map call WORK_INT(
+        what = split DELAY.result,
+    ) using (
+        disabled = self.disable,
+    )
+
+    call SUM_MAP(
+        what = WORK_INT.result,
+    )
+
+    return (
+        result = WORK_INT.result,
+        total  = SUM_MAP.total,
+    )
+}
+
+pipeline TOP(
+    in  map<int>   inputs,
+    out map<int>[] result,
+    out int[]      totals,
+)
+{
+    map call INNER(
+        inputs  = self.inputs,
+        disable = split [
+            true,
+            false,
+            true,
+        ],
+    )
+
+    return (
+        result = INNER.result,
+        totals = INNER.total,
+    )
+}
+
+call TOP(
+    inputs = {
+        "x": 1,
+        "y": 2,
+    },
+)
