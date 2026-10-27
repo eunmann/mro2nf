@@ -32,6 +32,7 @@ bench/                 the overhead benchmark fixtures and baseline
 test/e2e/              e2e suites: goldens, mrp differential, docker, bench, scale
 test/divergence/       the divergence allowlist checks and table generator
 test/gen/              random well-typed programs for the generative differential
+test/corpus/           invocations of the real-world .mro corpus (testdata/corpus, MRO2NF_CORPUS)
 test/scale/, test/wide/   the scale tier's gates; a pipeline of many stage calls
 test/docs/             the Markdown link check
 test/thirdparty/       THIRD_PARTY_NOTICES and drift checks against the Martian module
@@ -53,11 +54,12 @@ scripts/aws/           comparison and critical-path analysis of live AWS runs
 | `make test-e2e` | the e2e suites below, but docker, `nextflow lint`, bench, scale and Cell Ranger |
 | `make test-e2e-docker` | pipelines under the `docker` profile, in images built from the runtime image |
 | `make test-mrp-diff` | the `mrp` differential alone |
-| `make lint-nf` | `nextflow lint` of every fixture's project |
+| `make lint-nf` | `nextflow lint` of every fixture's and corpus invocation's project |
 | `make bench` | the overhead gates; `BENCH_UPDATE=1` records `bench/baseline.json` |
 | `make test-scale` | the bench shapes at production widths (`SCALE_RUN`, `SCALE_WIDTH`) |
 | `make gen-diff` | generated programs against `mrp` (`GEN_SEEDS`, `GEN_COUNT`) |
 | `make test-cellranger` | the Cell Ranger check (`CELLRANGER_HOME`) |
+| `make test-corpus` | the corpus sweeps and `nextflow lint` over the pipelines whose MROPATH is `CORPUS` |
 | `make record-goldens` | re-record `testdata/*/expected/outs/` from `mrp` |
 | `make docs-divergences`, `make notices` | regenerate `docs/divergences.md` and `THIRD_PARTY_NOTICES` |
 | `make vulncheck`, `make deadcode`, `make cross` | govulncheck, unreachable code, a build for each release platform |
@@ -76,6 +78,7 @@ The bar is `mrp` itself. Every difference a test finds must match an entry of
 | Docker | `make test-e2e-docker` | container isolation, the AWS Batch profile run on local Docker, the HealthOmics package |
 | Overhead | `make bench`, `make test-scale` | tasks, staged bytes and driver heap at two widths per shape ([design](docs/design.md#the-overhead-rule)) |
 | Cell Ranger | `make test-cellranger` | Cell Ranger 10.1.0 `testrun` under both runners, `metrics_summary.csv` byte for byte; needs a licensed bundle, never in CI |
+| Corpus | `make test-corpus CORPUS=<mropath>` | every pipeline and stage under the MROPATH, invoked with its inputs unset, through Martian's compiler, the unit tests' call-graph sweeps and `nextflow lint`. The MIT corpus in `testdata/corpus` runs in `make test` and `make lint-nf`, the AGPL repos in the nightly. Point it at your own licensed pipelines, such as a Cell Ranger install's `mro` dir; they never run in CI |
 
 e2e tests carry the `e2e` build tag and always run with `-count=1`. A fixture
 `mrp` cannot complete (`exec_min`, `mixed_adapters`) has a golden only.
@@ -100,7 +103,7 @@ the next live run.
 | Workflow | Runs | Gates |
 |---|---|---|
 | [`pr-validation.yml`](.github/workflows/pr-validation.yml) | every PR | lint, `go mod tidy`, `make vulncheck` and `make deadcode`; `make cross`; unit tests with `-race` and coverage; the e2e and docker suites; `make lint-nf`; `make bench` |
-| [`nightly.yml`](.github/workflows/nightly.yml) | daily; weekly for the heavy tier | the e2e suites on Nextflow 26.04.0 and the latest stable, a 1,000-fork scale smoke, unit tests, lint, vulnerability scans of the code and the runtime image; weekly, the full scale tier and a long `make gen-diff` |
+| [`nightly.yml`](.github/workflows/nightly.yml) | daily; weekly for the heavy tier | the e2e suites on Nextflow 26.04.0 and the latest stable, a 1,000-fork scale smoke, `make test-corpus` on the AGPL pipeline repos at pinned commits, unit tests, lint, vulnerability scans of the code and the runtime image; weekly, the full scale tier and a long `make gen-diff` |
 | [`cdk-validation.yml`](.github/workflows/cdk-validation.yml) | changes to `deploy/awsbatch-cdk` | compiles and synthesizes the example stack |
 | [`release.yml`](.github/workflows/release.yml) | dispatched by hand | cuts a release |
 

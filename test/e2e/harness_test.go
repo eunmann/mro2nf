@@ -270,7 +270,13 @@ func repoTools() toolchain {
 // runs under the real mrjob beside tools' mre, as mrp runs py and comp
 // stages.
 func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) error {
-	args := slices.Concat([]string{"-o", proj, "-mropath", dir}, extra, []string{filepath.Join(dir, mro)})
+	return transpileWith(tools, []string{dir}, filepath.Join(dir, mro), proj, extra...)
+}
+
+// transpileWith is transpileInto for the invocation at mro, compiled with
+// the include path mroPath.
+func transpileWith(tools toolchain, mroPath []string, mro, proj string, extra ...string) error {
+	args := slices.Concat([]string{"-o", proj, "-mropath", strings.Join(mroPath, string(os.PathListSeparator))}, extra, []string{mro})
 
 	cmd := exec.Command(tools.mro2nf, args...)
 	cmd.Dir = root

@@ -1,0 +1,45 @@
+#
+# Copyright (c) 2020 10X Genomics, Inc. All rights reserved.
+#
+# WARNING: This file is auto-generated.
+# DO NOT MODIFY THIS FILE DIRECTLY
+#
+
+stage BUILD_INDEX(
+    in  path ref_fasta,
+    out path index,
+    src comp "ghost martian build_index",
+) using (
+    mem_gb  = 8,
+    threads = 20,
+)
+
+stage MAP_READS(
+    in  path index,
+    in  path fastq_r2,
+    out map  eq_classes,
+    out map  coverage,
+    src comp "ghost martian map_reads",
+) using (
+    mem_gb  = 4,
+    threads = 12,
+)
+
+stage CORRECT_BARCODES(
+    in  path     fastq_r1,
+    in  path     whitelist,
+    out string[] valid_barcodes,
+    src comp     "ghost martian correct_barcodes",
+) using (
+    mem_gb  = 4,
+    threads = 12,
+)
+
+stage COUNT_UMI(
+    in  path     fastq_r1,
+    out string[] umis,
+    src comp     "ghost martian count_umi",
+) using (
+    mem_gb  = 4,
+    threads = 4,
+)

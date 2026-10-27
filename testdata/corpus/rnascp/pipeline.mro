@@ -1,0 +1,69 @@
+stage BUILD_INDEX(
+    in  path ref_fasta,
+    out path index,
+    src comp "ghost martian build_index",
+) using (
+    mem_gb  = 8,
+    threads = 20,
+)
+
+stage MAP_READS(
+    in  path index,
+    in  path fastq_r2,
+    out map  eq_classes,
+    out map  coverage,
+    src comp "ghost martian map_reads",
+) using (
+    mem_gb  = 4,
+    threads = 12,
+)
+
+stage CORRECT_BARCODES(
+    in  path     fastq_r1,
+    in  path     whitelist,
+    out string[] valid_barcodes,
+    src comp     "ghost martian correct_barcodes",
+) using (
+    mem_gb  = 4,
+    threads = 12,
+)
+
+
+stage COUNT_UMI(
+    in  path     fastq_r1,
+    out string[] umis,
+    src comp     "ghost martian count_umi",
+) using (
+    mem_gb  = 4,
+    threads = 4,
+)
+
+
+pipeline GHOST(
+    in path ref_fasta,
+    in path fastq_r2,
+    in path whitelist,
+    in path fastq_r1,
+    out string[] umis,
+    out string[] valid_barcodes,
+)
+{
+    call BUILD_INDEX(
+        ref_fasta = self.ref_fasta,
+    )
+    call MAP_READS(
+        index = BUILD_INDEX.index,
+        fastq_r2 = self.fastq_r2,
+    )
+    call CORRECT_BARCODES(
+        whitelist = self.whitelist,
+        fastq_r1 = self.fastq_r1,
+    )
+    call COUNT_UMI(
+        fastq_r1 = self.fastq_r1,
+    )
+    return (
+        umis = COUNT_UMI.umis,
+        valid_barcodes = CORRECT_BARCODES.valid_barcodes,
+    )
+}

@@ -3,14 +3,14 @@ package cg
 import (
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// standInSkipped are the fixtures the stand-in cannot run, by why.
+// standInSkipped are the fixtures and corpus entries the stand-in cannot
+// run, by why.
 func standInSkipped() map[string]string {
 	return map[string]string{
 		"split_gate_entry": "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
@@ -31,31 +31,28 @@ func standInSkipped() map[string]string {
 func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 	var found []string
 
-	for _, mro := range entryFiles(t) {
-		dir := filepath.Dir(mro)
-		fixture := filepath.Base(dir)
-
-		if _, skip := standInSkipped()[fixture]; skip {
+	for _, e := range sweepEntries(t) {
+		if _, skip := standInSkipped()[e.name]; skip {
 			continue
 		}
 
-		src, err := ReadSource(mro, []string{dir})
+		src, err := ReadSource(e.mro, e.mroPath)
 		if err != nil {
-			t.Fatalf("%s: %v", mro, err)
+			t.Fatalf("%s: %v", e.label, err)
 		}
 
-		witness, _, err := src.Witness([]string{dir})
+		witness, _, err := src.Witness(e.mroPath)
 		if err != nil {
-			t.Fatalf("%s: witness: %v", mro, err)
+			t.Fatalf("%s: witness: %v", e.label, err)
 		}
 
-		literal, err := Load(mro, "", []string{dir})
+		literal, err := Load(e.mro, "", e.mroPath)
 		if err != nil {
-			t.Fatalf("%s: %v", mro, err)
+			t.Fatalf("%s: %v", e.label, err)
 		}
 
 		for kind, g := range map[string]*Graph{"literal": literal, "witness": witness} {
-			name := fmt.Sprintf("%s/%s %s", fixture, filepath.Base(mro), kind)
+			name := e.label + " " + kind
 
 			t.Run(name, func(t *testing.T) {
 				s := standInOf(t, g)

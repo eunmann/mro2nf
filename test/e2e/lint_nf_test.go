@@ -39,6 +39,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/test/corpus"
 	"github.com/eunmann/mro2nf/test/wide"
 )
 
@@ -50,9 +51,10 @@ import (
 // lintBatchSize-1.
 const lintBatchSize = 150
 
-// TestNextflowLint lints the generated project for every testdata fixture. It
-// enumerates the fixtures (rather than a hand-kept list) so any new fixture is
-// linted automatically. ANY transpile failure is a test failure, except for a
+// TestNextflowLint lints the generated project for every testdata fixture
+// and every corpus invocation Martian accepts (test/corpus). It enumerates
+// them (rather than a hand-kept list) so any new fixture is linted
+// automatically. ANY transpile failure is a test failure, except for a
 // transpileRefused fixture, which must fail to transpile.
 func TestNextflowLint(t *testing.T) {
 	t.Parallel()
@@ -62,13 +64,13 @@ func TestNextflowLint(t *testing.T) {
 	buildBinaries(t)
 
 	parent := t.TempDir()
-	emissions := transpileLintFixtures(t, parent)
+	emissions := transpileLintEmissions(t, parent)
 	projects := transpiledProjects(emissions)
 
 	var errsByProj map[string][]string
 
-	if len(projects) > 0 { // every fixture failing to transpile still reports below
-		t.Logf("linting %d emissions of %d fixtures", len(projects), len(emissions))
+	if len(projects) > 0 { // every invocation failing to transpile still reports below
+		t.Logf("linting %d emissions of %d invocations", len(projects), len(emissions))
 
 		assertPathIndependent(t, emissions)
 		assertNoProjectDirContext(t, parent, projects)
@@ -77,23 +79,28 @@ func TestNextflowLint(t *testing.T) {
 	}
 
 	for _, e := range emissions {
-		t.Run(e.fixture, func(t *testing.T) {
+		t.Run(e.project, func(t *testing.T) {
 			t.Parallel() // verdicts are precomputed; subtests only read
 
-			if reason, refused := transpileRefused[e.fixture]; refused {
+			if reason, refused := transpileRefused[e.project]; refused {
 				if e.transpileErr == nil {
-					t.Errorf("transpile %s succeeded; it must be refused: %s", e.fixture, reason)
+					t.Errorf("transpile %s succeeded; it must be refused: %s", e.project, reason)
 				}
 
 				return
 			}
 
-			if e.transpileErr != nil {
-				t.Fatalf("transpile %s: %v", e.fixture, e.transpileErr)
+			if e.transpileErr != nil && strings.HasPrefix(e.project, lintCorpusPrefix) &&
+				strings.Contains(e.transpileErr.Error(), keywordInputRefusal) {
+				t.Skipf("refused as docs/feature-coverage.md documents (keyword-input): %v", e.transpileErr)
 			}
 
-			if errs := errsByProj[e.fixture]; len(errs) > 0 {
-				t.Errorf("nextflow lint reported diagnostics for %s:\n%s", e.fixture, strings.Join(errs, "\n"))
+			if e.transpileErr != nil {
+				t.Fatalf("transpile %s: %v", e.project, e.transpileErr)
+			}
+
+			if errs := errsByProj[e.project]; len(errs) > 0 {
+				t.Errorf("nextflow lint reported diagnostics for %s:\n%s", e.project, strings.Join(errs, "\n"))
 			}
 		})
 	}
@@ -165,30 +172,73 @@ func breakModule(t *testing.T, proj, dst, module string) {
 	}
 }
 
-// lintEmission is one fixture's project, transpiled into <parent>/<fixture>,
-// the dir name the diagnostics attribute to.
+// lintEmission is one invocation's project, transpiled into
+// <parent>/<project>, the dir name the diagnostics attribute to: a
+// fixture's name, or corpus_ and a corpus entry's slug.
 type lintEmission struct {
-	fixture      string
+	project      string
+	mro          string
+	mroPath      []string
 	transpileErr error
 	digest       string // emission content digest; empty on transpile failure
 }
 
-// transpileLintFixtures transpiles every fixture into a directory of its
-// name under parent and digests each emission. Transpile failures are
-// recorded, not fatal, so one broken fixture doesn't hide the verdicts for
-// the rest.
-func transpileLintFixtures(t *testing.T, parent string) []*lintEmission {
+// lintCorpusPrefix starts every corpus emission's project name, which no
+// fixture's name does.
+const lintCorpusPrefix = "corpus_"
+
+// keywordInputRefusal is mro2nf's documented refusal of an entry input named
+// with a Groovy or Nextflow keyword (#585). A corpus stage entry's input may
+// be so named (Cell Ranger's LOGIC_NOT has `boolean`), though no pipeline
+// that calls the stage is refused.
+const keywordInputRefusal = "which Nextflow's params block refuses as a param name"
+
+// lintEmissions are every fixture's invocation and every corpus
+// invocation Martian accepts, each named by its project.
+func lintEmissions(t *testing.T) []*lintEmission {
 	t.Helper()
 
 	fixtures := lintFixtures(t)
 	emissions := make([]*lintEmission, 0, len(fixtures))
 
 	for _, fx := range fixtures {
-		e := &lintEmission{fixture: fx}
-		emissions = append(emissions, e)
+		if strings.HasPrefix(fx, lintCorpusPrefix) {
+			t.Fatalf("fixture %s starts with %q, which names corpus emissions", fx, lintCorpusPrefix)
+		}
 
-		proj := filepath.Join(parent, fx)
-		if err := transpileInto(repoTools(), filepath.Join(root, "testdata", fx), "pipeline.mro", proj); err != nil {
+		dir := filepath.Join(root, "testdata", fx)
+		emissions = append(emissions, &lintEmission{project: fx, mro: filepath.Join(dir, "pipeline.mro"), mroPath: []string{dir}})
+	}
+
+	srcs, err := corpus.Sources(filepath.Join(root, "testdata", "corpus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := corpus.Load(t.TempDir(), srcs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, e := range corpus.Accepted(entries) {
+		emissions = append(emissions, &lintEmission{project: lintCorpusPrefix + corpus.Slug(e.Name), mro: e.Mro, mroPath: e.MroPath})
+	}
+
+	return emissions
+}
+
+// transpileLintEmissions transpiles every lintEmissions invocation into a
+// directory of its project name under parent and digests each emission.
+// Transpile failures are recorded, not fatal, so one broken invocation
+// doesn't hide the verdicts for the rest.
+func transpileLintEmissions(t *testing.T, parent string) []*lintEmission {
+	t.Helper()
+
+	emissions := lintEmissions(t)
+
+	for _, e := range emissions {
+		proj := filepath.Join(parent, e.project)
+		if err := transpileWith(repoTools(), e.mroPath, e.mro, proj); err != nil {
 			e.transpileErr = err
 
 			continue
@@ -200,21 +250,21 @@ func transpileLintFixtures(t *testing.T, parent string) []*lintEmission {
 	return emissions
 }
 
-// transpiledProjects returns the project dirs of the fixtures that
-// transpiled, in fixture (deterministic) order.
+// transpiledProjects returns the project dirs of the invocations that
+// transpiled, in lintEmissions (deterministic) order.
 func transpiledProjects(emissions []*lintEmission) []string {
 	var dirs []string
 
 	for _, e := range emissions {
 		if e.transpileErr == nil {
-			dirs = append(dirs, e.fixture)
+			dirs = append(dirs, e.project)
 		}
 	}
 
 	return dirs
 }
 
-// assertPathIndependent re-transpiles every fixture into a directory of
+// assertPathIndependent re-transpiles every invocation into a directory of
 // another name and requires a byte-identical emission: an absolute output
 // path, a timestamp or an unstable map order in the emitter's output would
 // change every task's inputs between transpiles of the same pipeline.
@@ -228,16 +278,16 @@ func assertPathIndependent(t *testing.T, emissions []*lintEmission) {
 			continue
 		}
 
-		proj := filepath.Join(again, e.fixture+"__again")
-		if err := transpileInto(repoTools(), filepath.Join(root, "testdata", e.fixture), "pipeline.mro", proj); err != nil {
-			t.Errorf("re-transpile %s: %v", e.fixture, err)
+		proj := filepath.Join(again, e.project+"__again")
+		if err := transpileWith(repoTools(), e.mroPath, e.mro, proj); err != nil {
+			t.Errorf("re-transpile %s: %v", e.project, err)
 
 			continue
 		}
 
 		if got := treeDigest(t, proj); got != e.digest {
 			t.Errorf("%s: the emission into %s differs from the one into %s; it depends on its output path or is not deterministic",
-				e.fixture, proj, e.fixture)
+				e.project, proj, e.project)
 		}
 	}
 }

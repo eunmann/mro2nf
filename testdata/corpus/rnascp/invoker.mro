@@ -1,0 +1,8 @@
+@include "pipeline.mro"
+
+call GHOST(
+    ref_fasta = "/work/shah/reference/transcriptomes/fastas/gencode_sm.fa",
+    fastq_r2  = "/work/shah/ceglian/reaper/ghost/data/small_r2.fastq",
+    fastq_r1  = "/work/shah/ceglian/reaper/ghost/data/small_r1.fastq",
+    whitelist = "/work/shah/ceglian/reaper/scdiff/test/3M-february-2018.txt",
+)
