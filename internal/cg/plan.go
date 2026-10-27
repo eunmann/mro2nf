@@ -36,17 +36,19 @@ type Plan struct {
 // PlanNode is one witness node at run start. Digest identifies the node's
 // resolved spec in the invocation and what its post writes for its readers,
 // so a task's cache key changes only with its own node and those. Off
-// disables every instance; OffAt the instances, by fork key, a static
-// per-fork binding disables. Collapse are the positions of the witness
-// node's roots the invocation's node is not forked on: its job is the same
-// at every fork of them, which runs at their ordinal 0 only and serves the
-// rest. Files are the entry files its instances read. Stage is the stage it
-// runs, which the pipeline outs' node has none of.
+// disables every instance; OffAt the instances a static per-fork binding
+// disables, by their ordinals of the witness node's roots at the positions
+// OffRoots, those the binding varies with. Collapse are the positions of
+// the witness node's roots the invocation's node is not forked on: its job
+// is the same at every fork of them, which runs at their ordinal 0 only and
+// serves the rest. Files are the entry files its instances read. Stage is
+// the stage it runs, which the pipeline outs' node has none of.
 type PlanNode struct {
 	Fqid     string
 	Digest   string
 	Off      bool
 	OffAt    []string
+	OffRoots []int
 	Collapse []int
 	Files    []PlanFiles
 	Stage    *syntax.Stage
@@ -219,16 +221,25 @@ func planEntry(wtRoots []TopoRoot, own map[string][]Element) (map[string][]PlanF
 	return out, planned, nil
 }
 
-// plannedForks are the planned forks of each entry-fed root, and an index
-// of each root's, built when a root its outer roots include is planned,
-// once its own forks are all planned.
+// plannedForks are the planned forks of each entry-fed root, an entry each
+// however few, and an index of each root's, built when a root its outer
+// roots include is planned, once its own forks are all planned.
 type plannedForks struct {
 	by  map[string][]entryFork
 	idx map[string]*agreeIndex
 }
 
+// has reports whether root is entry-fed, so planned.
+func (p *plannedForks) has(root string) bool {
+	_, ok := p.by[root]
+
+	return ok
+}
+
 // plan plans root r's forks own, under each fork of its outer roots.
 func (p *plannedForks) plan(r TopoRoot, own []Element) ([]PlanFork, error) {
+	p.by[r.Fqid] = []entryFork{}
+
 	items := make([]agreeItem, len(own))
 	for i, el := range own {
 		items[i] = agreeItem{fork: el.Fork}
@@ -411,7 +422,7 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves 
 		}
 	}
 
-	if pn.OffAt, err = g.staticOff(st, n, wt, planned); err != nil {
+	if pn.OffAt, pn.OffRoots, err = g.staticOff(st, n, planned); err != nil {
 		return PlanNode{}, err
 	}
 
@@ -422,44 +433,90 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves 
 	return pn, nil
 }
 
-// staticOff are the fork keys of the instances of st a disable binding that
-// reads no stage disables, which every entry-fed root of st enumerates. A
-// binding that does not resolve to a bool is left to the instance's own
-// task, which fails on it as mrp fails the fork.
-func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, planned *plannedForks) ([]string, error) {
+// staticOff are the instances of st a disable binding that reads no stage
+// disables, keyed by their ordinals of the roots at the positions in n's
+// roots it returns, those the bindings vary with (offRoots): a binding's
+// value at a fork is the same whatever its fork of any other root, such as
+// one whose forks a stage fixes (core/stage.go:883 Fork.disabled resolves
+// it at the fork). A binding that does not resolve to a bool is left to
+// the instance's own task, which fails on it as mrp fails the fork.
+func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, planned *plannedForks) ([]string, []int, error) {
 	var static []syntax.Exp
+
+	calls := map[*syntax.CallStm]bool{}
 
 	for _, d := range st.Disabled() {
 		if _, isBool := d.(*syntax.BoolExp); !isBool && len(refIDs(d)) == 0 {
 			static = append(static, d)
+			splitCalls(d, calls)
 		}
 	}
 
-	if len(static) == 0 {
-		return nil, nil
+	at, err := g.offRoots(st, n, planned, calls)
+	if err != nil || len(at) == 0 {
+		return nil, nil, err
 	}
 
-	for _, root := range n.Roots {
-		if slices.ContainsFunc(wt.Roots, func(r TopoRoot) bool { return r.Fqid == root && r.Producer != "" }) {
-			return nil, fmt.Errorf("%w: %s has a disable binding over its forks and is forked on %s, whose forks a stage fixes", ErrShapeUnsupported, st.Fqid, root)
-		}
+	roots := make([]string, len(at))
+	for i, x := range at {
+		roots[i] = n.Roots[x]
 	}
 
 	r := &resolver{g: g, st: emptyStore{}}
 
 	var off []string
 
-	for _, in := range assignments(n.Roots, planned) {
-		for _, d := range static {
-			if on, err := r.disables(d, in.fork); err == nil && on {
-				off = append(off, DottedKey(entryFork{ords: in.ords}.key(n.Roots)))
+	for _, in := range assignments(roots, planned) {
+		if slices.ContainsFunc(static, func(d syntax.Exp) bool {
+			on, err := r.disables(d, in.fork)
 
-				break
+			return err == nil && on
+		}) {
+			off = append(off, DottedKey(entryFork{ords: in.ords}.key(roots)))
+		}
+	}
+
+	return off, at, nil
+}
+
+// offRoots are the positions in n's roots of the roots st is forked on
+// that a split of calls is on, and of the roots their forks vary with,
+// each of which the entry must fix for PLAN to enumerate its forks.
+func (g *Graph) offRoots(st *syntax.CallGraphStage, n TopoNode, planned *plannedForks, calls map[*syntax.CallStm]bool) ([]int, error) {
+	bound := map[string]bool{}
+
+	var add func(r *syntax.CallGraphStage)
+
+	add = func(r *syntax.CallGraphStage) {
+		if !bound[r.Fqid] {
+			bound[r.Fqid] = true
+			for _, o := range g.outerRoots(r) {
+				add(o)
 			}
 		}
 	}
 
-	return off, nil
+	for _, r := range st.ForkRoots() {
+		if calls[r.Call()] {
+			add(r)
+		}
+	}
+
+	var at []int
+
+	for x, root := range n.Roots {
+		if !bound[root] {
+			continue
+		}
+
+		if !planned.has(root) {
+			return nil, fmt.Errorf("%w: a disable binding of %s is forked on %s, whose forks a stage fixes", ErrShapeUnsupported, st.Fqid, root)
+		}
+
+		at = append(at, x)
+	}
+
+	return at, nil
 }
 
 // DottedKey is a fork key as the plan's records write it and the driver

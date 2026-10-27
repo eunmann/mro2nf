@@ -969,8 +969,9 @@ func TestEmitZipsByToken(t *testing.T) {
 	}
 }
 
-// TestEmitGatesBySet: PLAN's statically disabled fork keys of a node and a
-// gating instance's posted gates are each parsed once, into a set, so the
+// TestEmitGatesBySet: PLAN's statically disabled fork keys of a node, with
+// the positions of the roots they are over, and a gating instance's posted
+// gates are each parsed once, into a set, so the
 // gate of each of a node's N instances is a lookup, not a parse or scan of
 // N keys (split_gate_entry: SRC gates INNER.WORK and KEYED.WORK, its gates
 // parsed once for both). TestBench's forkdisabled lanes run both paths.
@@ -990,8 +991,8 @@ func TestEmitGatesBySet(t *testing.T) {
 	mains := wiringMains()
 
 	for name, want := range map[string]string{
-		"NODES":   "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
-		"GATE":    "r[1] == '1' || r[2].contains(k.join('.'))",
+		"NODES":   "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.subList(4, 8) + [f[8] == '-' ? [] : f[8].tokenize(',').collect { x -> x as int }]]",
+		"GATE":    "r[1] == '1' || r[2].contains(k[r[7]].join('.'))",
 		"GATES":   "posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })",
 		"ENABLED": "skip: disabled(v, gates)",
 		"REGATE":  "[disabled(v, gates)]",

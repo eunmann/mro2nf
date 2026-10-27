@@ -369,7 +369,7 @@ call NOT(boolean = false,)
 // refusing the shape is no test, as a refusal at transpile time is, and a
 // PLAN that failed otherwise, or a stage that failed, refuses nothing.
 func TestGenDiffSkipsPlanRefusal(t *testing.T) {
-	const refused = "mre: plan: unsupported call graph shape: TOP.W has a disable binding over its forks"
+	const refused = "mre: plan: unsupported call graph shape: a disable binding of TOP.W is forked on TOP.W, whose forks a stage fixes"
 
 	cases := []struct {
 		name, trace, stderr, want string

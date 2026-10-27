@@ -976,8 +976,8 @@ func (rp *cgReplay) readNodeOverrides(work string) {
 
 	for line := range strings.SplitSeq(text, "\n") {
 		f := strings.Split(line, " ")
-		if len(f) != 8 {
-			rp.t.Fatalf("nodes line %q: want fqid, digest, off, disabled keys, cpus, memory, overrides and collapsed roots", line)
+		if len(f) != 9 {
+			rp.t.Fatalf("nodes line %q: want fqid, digest, off, disabled keys, cpus, memory, overrides, collapsed roots and disabled key roots", line)
 		}
 
 		if f[6] != "-" {

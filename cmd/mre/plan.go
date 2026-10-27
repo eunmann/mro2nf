@@ -47,7 +47,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.profile, "profile", "", "the run's mrp --profile, which must disable profiling or name a profile")
 	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
 	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the gzip of the call as mrp's invocation generator builds it")
-	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
+	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides collapsed-roots disabled-key-roots")
 	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
@@ -293,12 +293,7 @@ func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 			return err
 		}
 
-		collapse := make([]string, len(n.Collapse))
-		for x, c := range n.Collapse {
-			collapse[x] = strconv.Itoa(c)
-		}
-
-		fmt.Fprintf(&nodes, "%s %s %s %s %s %s\n", n.Fqid, orDash(n.Digest), off, at, res, orDash(strings.Join(collapse, ",")))
+		fmt.Fprintf(&nodes, "%s %s %s %s %s %s %s\n", n.Fqid, orDash(n.Digest), off, at, res, positions(n.Collapse), positions(n.OffRoots))
 	}
 
 	if err := writeText(f.nodes, nodes.String()); err != nil {
@@ -351,6 +346,17 @@ func nodeResources(rt job.Runtime, n cg.PlanNode) (string, error) {
 // place of each space, as its line's fields are space-separated: compact
 // JSON holds a space only inside a string, where the escape decodes to it.
 const jsonSpace = `\` + "u0020"
+
+// positions is a node record's list of positions in a key, comma-joined,
+// or "-" for none.
+func positions(at []int) string {
+	out := make([]string, len(at))
+	for x, a := range at {
+		out[x] = strconv.Itoa(a)
+	}
+
+	return orDash(strings.Join(out, ","))
+}
 
 func orDash(s string) string {
 	if s == "" {

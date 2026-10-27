@@ -471,16 +471,17 @@ workflow CALL {
 
 // PLAN's records, as the driver reads them. NODES maps each node to its
 // digest, its off flag, the set of its statically disabled fork keys, the
-// cpus and memory its first task is scheduled with and its own overrides,
-// paired with the meta every task shares, so a node reads both from one
-// channel.
+// cpus and memory its first task is scheduled with, its own overrides, the
+// positions of its collapsed roots and the positions of the roots its
+// disabled keys are over, paired with the meta every task shares, so a
+// node reads both from one channel.
 workflow NODES {
     take:
     nodes
     shared
 
     main:
-    out = nodes.combine(shared).map { s, c -> [s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)] }, c] }
+    out = nodes.combine(shared).map { s, c -> [s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.subList(4, 8) + [f[8] == '-' ? [] : f[8].tokenize(',').collect { x -> x as int }]] }, c] }
 
     emit:
     out
@@ -660,7 +661,8 @@ workflow AFTER {
 
 // GATE gives each instance the meta of its node's tasks, planned from its
 // node's PLAN record and its own meta, which it carries on as its d, and
-// whether that record disables it: the whole node, or the instance's fork.
+// whether that record disables it: the whole node, or the instance's fork,
+// by its ordinals of the roots the record's disabled keys are over (r[7]).
 // It keys each by its ordinals, at positions next, of the roots of the
 // gating stage its node's first GATED joins on.
 workflow GATE {
@@ -673,7 +675,7 @@ workflow GATE {
     main:
     out = inst.combine(nodes).flatMap { k, fs, es, _tk, ns, c ->
         def r = ns[meta.node]
-        representative(k, r) != null ? [] : [[k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]]
+        representative(k, r) != null ? [] : [[k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k[r[7]].join('.'))]]
     }
 
     emit:
