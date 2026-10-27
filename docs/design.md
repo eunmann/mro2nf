@@ -245,7 +245,9 @@ differ from `mrp`'s job count, the most bytes one stage task stages grows with
 the width, a file is copied or uploaded once more per fork, a plumbing task
 touches a published file's bytes, or a lane exceeds `bench/baseline.json`.
 `make test-scale` runs the same shapes at up to 10,000 forks or chunks.
-`TestStandInStagesOnlyWhatItReads` holds every fixture to the staging rule.
+`TestStandInStagesOnlyWhatItReads` holds every fixture and every invocation of
+the real-world `.mro` corpus (`testdata/corpus`, `make test-corpus`) to the
+staging rule.
 
 ## Divergences
 

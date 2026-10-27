@@ -9,7 +9,7 @@ name: Nightly
 # release tier lives in release.yml.
 #
 # Two tiers share the workflow. The daily one runs the e2e suites, the scale
-# smoke, lint and the unit tests, and, whether or not the
+# smoke, the fetched corpus, lint and the unit tests, and, whether or not the
 # change gate skips those, the vulnerability scans of the code and the runtime
 # image. The weekly one, from its own cron or a dispatch with `heavy`,
 # runs the full scale tier and the generative differential's long run, which
@@ -196,6 +196,61 @@ jobs:
           path: artifacts/scale/
           if-no-files-found: ignore
 
+  # The corpus sweeps (#653) on the AGPL pipeline repos, fetched at pinned
+  # commits and never committed; every PR runs them on the vendored MIT
+  # corpus. mropath is each repo's MROPATH below its checkout. Supernova's
+  # repo sets none for its own pipelines: lib/tada/mro holds includes only it
+  # has, and Martian refuses its three pipelines that include the
+  # _fastq_prep_new.mro both it and mro hold.
+  corpus:
+    name: Nightly corpus ${{ matrix.repo }}
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: 10XGenomics/supernova
+            commit: b82c3d8efa68bda2d95f30621cd6d91308ce11a2
+            mropath: mro:lib/tada/mro:tenkit/mro
+          - repo: 10XGenomics/supernova-chili-pepper
+            commit: a8defc71fa9a29d6d20a184155ddb9c86362c2a8
+            mropath: mro
+          - repo: 10XGenomics/single-cell-3prime-snp-clustering
+            commit: 0d03f4131ecb41af8bcf2ba1265bb0af7847c9f7
+            mropath: mro
+          - repo: MGI-tech-bioinformatics/SuperPlus
+            commit: 066f214bcb141e958ee4a062ce30e181d6e85821
+            mropath: mro
+    env:
+      E2E_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      # The action is pinned; the Nextflow it installs is latest, deliberately.
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - name: Fetch the corpus at its pinned commit
+        env:
+          REPO: ${{ matrix.repo }}
+          COMMIT: ${{ matrix.commit }}
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/corpus"
+          git -C "$RUNNER_TEMP/corpus" fetch -q --depth 1 "https://github.com/$REPO" "$COMMIT"
+          git -C "$RUNNER_TEMP/corpus" checkout -q FETCH_HEAD
+      - env:
+          MROPATH_IN_REPO: ${{ matrix.mropath }}
+        run: make test-corpus CORPUS="$(printf '%s' "$MROPATH_IN_REPO" | tr ':' '\n' | sed "s|^|$RUNNER_TEMP/corpus/|" | paste -sd:)"
+
   unit:
     name: Nightly unit tests
     needs: gate
@@ -369,7 +424,7 @@ jobs:
   # failure does not withhold it.
   mark:
     name: Nightly pass record
-    needs: [gate, e2e, docker, smoke, unit, lint, scale, gendiff]
+    needs: [gate, e2e, docker, smoke, corpus, unit, lint, scale, gendiff]
     if: ${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -386,7 +441,7 @@ jobs:
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [gate, e2e, docker, smoke, unit, lint, vulncheck, imagescan, scale, gendiff, mark]
+    needs: [gate, e2e, docker, smoke, corpus, unit, lint, vulncheck, imagescan, scale, gendiff, mark]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

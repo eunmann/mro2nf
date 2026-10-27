@@ -16,7 +16,7 @@ DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.52.0
 GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale test-cellranger vet lint lint-check vulncheck deadcode docs-divergences notices cloc install clean help
+.PHONY: build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale test-cellranger test-corpus vet lint lint-check vulncheck deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -124,6 +124,20 @@ test-scale: build ## Nightly scale tier: bench shapes at production widths (SCAL
 
 test-cellranger: build ## Real-CellRanger differential baseline (opt-in; set CELLRANGER_HOME=<extracted bundle>)
 	$(GO_E2E) -timeout 30m -run '^TestCellRanger'
+
+# The corpus sweeps (#653) over the pipelines whose MROPATH CORPUS is, beside
+# the vendored corpus: Martian's verdicts, the call-graph sweeps and the
+# Nextflow lint. The nightly runs it on the AGPL repos it fetches; locally it
+# runs on what you point it at, such as a licensed Cell Ranger install's mro
+# dir, which never enters CI. Its roots are made absolute, as each test reads
+# them from its own package's dir.
+CORPUS_SWEEPS := ^(TestWitnessCoversLiteral|TestStandInRunOfEveryFixture|TestStandInStagesOnlyWhatItReads|TestSplitCallsAreMartians)$$
+test-corpus: build ## Corpus sweeps and nextflow lint over CORPUS=<mropath> (opt-in; e.g. your own Cell Ranger install's mro dir)
+	@test -n '$(CORPUS)' || { echo 'test-corpus: set CORPUS to the MROPATH of the pipelines to sweep'; exit 1; }
+	export MRO2NF_CORPUS='$(subst $(eval) ,:,$(abspath $(subst :, ,$(CORPUS))))'; \
+	go test -count=1 -v -run '^TestCorpusReport$$' ./test/corpus/ && \
+	go test -count=1 -run '$(CORPUS_SWEEPS)' ./internal/cg/ && \
+	$(GO_E2E) -timeout 30m -run '^TestNextflowLint$$'
 
 vet: ## Run go vet
 	go vet ./...

@@ -596,6 +596,111 @@ func runIssueStep(t *testing.T, script, findings, issue string) string {
 	return string(data)
 }
 
+// nightlyCorpus are the repos the corpus job fetches, by their pinned
+// commit: the AGPL pipeline repos (#653). CI fetches no 10x-licensed or
+// unlicensed repo; the repo commits none.
+func nightlyCorpus() map[string]string {
+	return map[string]string{
+		"10XGenomics/supernova":                         "b82c3d8efa68bda2d95f30621cd6d91308ce11a2",
+		"10XGenomics/supernova-chili-pepper":            "a8defc71fa9a29d6d20a184155ddb9c86362c2a8",
+		"10XGenomics/single-cell-3prime-snp-clustering": "0d03f4131ecb41af8bcf2ba1265bb0af7847c9f7",
+		"MGI-tech-bioinformatics/SuperPlus":             "066f214bcb141e958ee4a062ce30e181d6e85821",
+	}
+}
+
+// fakeTool stands in for git and make: each call appends its name and
+// arguments, as one line, to $FAKE_LOG.
+const fakeTool = `#!/bin/bash
+echo "$(basename "$0") $*" >> "$FAKE_LOG"
+`
+
+// TestNightlyCorpusFetchesPinnedAGPL runs the corpus job's fetch and sweep
+// steps against a fake git and make for each matrix entry: the job fetches
+// exactly the nightlyCorpus repos, each by its pinned commit alone, and
+// runs make test-corpus on the repo's MROPATH below the checkout.
+func TestNightlyCorpusFetchesPinnedAGPL(t *testing.T) {
+	requireTools(t, "bash")
+
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("corpus")
+	steps := job.get("steps").items
+
+	fetch := slices.IndexFunc(steps, func(s *yamlNode) bool { return strings.Contains(scalarOf(s.get("run")), "git -C") })
+	sweep := slices.IndexFunc(steps, func(s *yamlNode) bool { return strings.HasPrefix(scalarOf(s.get("run")), "make test-corpus ") })
+
+	if fetch < 0 || sweep < 0 {
+		t.Fatalf("%s corpus job: fetch step %d, make test-corpus step %d; want both", nightlyWorkflow, fetch, sweep)
+	}
+
+	got := map[string]string{}
+
+	for _, inc := range job.get("strategy").get("matrix").get("include").items {
+		repo, commit, mropath := scalarOf(inc.get("repo")), scalarOf(inc.get("commit")), scalarOf(inc.get("mropath"))
+		got[repo] = commit
+
+		tmp := t.TempDir()
+		log := runCorpusSteps(t, []string{scalarOf(steps[fetch].get("run")), scalarOf(steps[sweep].get("run"))},
+			[]string{"REPO=" + repo, "COMMIT=" + commit, "MROPATH_IN_REPO=" + mropath, "RUNNER_TEMP=" + tmp})
+
+		roots := strings.Split(mropath, ":")
+		for i, r := range roots {
+			roots[i] = tmp + "/corpus/" + r
+		}
+
+		for _, want := range []string{
+			"git -C " + tmp + "/corpus fetch -q --depth 1 https://github.com/" + repo + " " + commit,
+			"make test-corpus CORPUS=" + strings.Join(roots, ":"),
+		} {
+			if !slices.Contains(log, want) {
+				t.Errorf("%s: the corpus job runs\n%s\nwant %q among them", repo, strings.Join(log, "\n"), want)
+			}
+		}
+	}
+
+	if d := cmp.Diff(nightlyCorpus(), got); d != "" {
+		t.Errorf("%s corpus job repos (-nightlyCorpus +matrix):\n%s", nightlyWorkflow, d)
+	}
+
+	for step, env := range map[int]map[string]string{
+		fetch: {"REPO": "${{ matrix.repo }}", "COMMIT": "${{ matrix.commit }}"},
+		sweep: {"MROPATH_IN_REPO": "${{ matrix.mropath }}"},
+	} {
+		for k, v := range env {
+			if got := scalarOf(steps[step].get("env").get(k)); got != v {
+				t.Errorf("%s corpus job step %d env %s = %q, want %q", nightlyWorkflow, step, k, got, v)
+			}
+		}
+	}
+}
+
+// runCorpusSteps runs scripts in order under env with a fake git and make
+// on PATH, and returns the calls they made.
+func runCorpusSteps(t *testing.T, scripts, env []string) []string {
+	t.Helper()
+
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "calls.log")
+	for _, tool := range []string{"git", "make"} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte(fakeTool), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, script := range scripts {
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = slices.Concat(os.Environ(), env, []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "FAKE_LOG=" + log})
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("corpus step: %v\n%s", err, out)
+		}
+	}
+
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
 // scalarOf is n's scalar, or "" for an absent node.
 func scalarOf(n *yamlNode) string {
 	if n == nil {

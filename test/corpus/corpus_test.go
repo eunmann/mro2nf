@@ -131,7 +131,7 @@ func TestLoadRefusesSlugCollisions(t *testing.T) {
 }
 
 // TestExternal: Env is an MROPATH; empty elements name no root, a missing
-// root fails loudly, and the entries are named below the roots' common
+// or relative root fails loudly, and the entries are named below the roots' common
 // directory, so two roots holding one file name stay apart.
 func TestExternal(t *testing.T) {
 	stage := "stage S(\n    in  int n,\n    src py  \"s\",\n)\n"
@@ -166,6 +166,10 @@ func TestExternal(t *testing.T) {
 
 	if _, err := External(string(filepath.ListSeparator)); !errors.Is(err, errNoRoots) {
 		t.Errorf("External of no root = %v, want %v", err, errNoRoots)
+	}
+
+	if _, err := External("mro"); !errors.Is(err, errRelativeRoot) {
+		t.Errorf("External of a relative root = %v, want %v", err, errRelativeRoot)
 	}
 }
 

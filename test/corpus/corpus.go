@@ -36,8 +36,9 @@ type Source struct {
 
 // Entry is one invocation of a corpus pipeline or stage.
 type Entry struct {
-	// Name is the source, the declaring file below the source's roots, and,
-	// for a synthesized invocation, the callable: rnascp/pipeline.mro/GHOST.
+	// Name is the source, the declaring file below the directory common to
+	// the source's roots, and, for a synthesized invocation, the callable:
+	// rnascp/pipeline.mro/GHOST.
 	Name    string
 	Mro     string
 	MroPath []string
@@ -50,6 +51,7 @@ var (
 	errSlugCollision = errors.New("corpus entries share a slug")
 	errMartianPanic  = errors.New("martian panicked")
 	errNoRoots       = errors.New("names no root")
+	errRelativeRoot  = errors.New("is not an absolute path")
 )
 
 // Sources are the vendored sources and the external source Env names, if
@@ -94,7 +96,8 @@ func Vendored(vendored string) ([]Source, error) {
 	return out, nil
 }
 
-// External is the source whose roots the MROPATH mropath lists.
+// External is the source whose roots the MROPATH mropath lists. A root is
+// absolute: each test reads Env from its own package's directory.
 func External(mropath string) (Source, error) {
 	src := Source{Name: ExternalSource}
 
@@ -103,11 +106,11 @@ func External(mropath string) (Source, error) {
 			continue
 		}
 
-		root, err := filepath.Abs(r)
-		if err == nil {
-			root, err = filepath.EvalSymlinks(root)
+		if !filepath.IsAbs(r) {
+			return Source{}, fmt.Errorf("%s root %s: %w", Env, r, errRelativeRoot)
 		}
 
+		root, err := filepath.EvalSymlinks(r)
 		if err != nil {
 			return Source{}, fmt.Errorf("%s root %s: %w", Env, r, err)
 		}
