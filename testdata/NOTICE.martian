@@ -1,0 +1,19 @@
+Martian test material in testdata/
+
+The paths below are copied from Martian (https://github.com/martian-lang/martian)
+at commit 50ad6c054d307cb6cacb9082425c38c996f216e1, the commit go.mod pins.
+Martian is under the MIT license, reproduced in LICENSE.martian beside this
+file:
+
+    Copyright (c) 2014-2017 10x Genomics, Inc.
+    Copyright (c) 2014-2017 Martian Authors
+
+testdata/ path                            Martian path
+--------------------------------------    ---------------------------------------------
+split_test/                               test/split_test/
+corpus/disable_bindings.mro               martian/syntax/testdata/disable_bindings.mro
+corpus/map_call_test.mro                  martian/syntax/testdata/map_call_test.mro
+corpus/resolve_test.mro                   martian/syntax/testdata/resolve_test.mro
+corpus/structs.mro                        martian/syntax/testdata/structs.mro
+corpus/map_call_edge_cases.mro            martian/syntax/testdata/map_call_edge_cases.mro,
+                                          without some of its stages, calls and outputs
