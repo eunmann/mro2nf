@@ -229,6 +229,48 @@ func TestGenBudgetSpent(t *testing.T) {
 	}
 }
 
+// TestStageTasksVerdict pins the stage-task gate on a fake run: the tasks
+// of the stage module's aliases count, each once however many attempts it
+// took, plumbing tasks do not, and a count unequal to mrp's jobs is a
+// finding.
+func TestStageTasksVerdict(t *testing.T) {
+	proj, ps := t.TempDir(), t.TempDir()
+	writeTestFile(t, filepath.Join(proj, "main.nf"), "include { STAGE as N0_A; STAGE_SPLIT as N1_B_SP } from './modules/stage.nf'\n")
+	writeTestFile(t, filepath.Join(proj, "subworkflows", "P.nf"), "include { STAGE_MAIN as N1_B_MN } from '../modules/stage.nf'\n")
+	writeTestFile(t, filepath.Join(proj, "trace.txt"), "hash\tname\tstatus\texit\n"+
+		"aa/01\tPLAN\tCOMPLETED\t0\n"+
+		"aa/02\tP:N0_A (1)\tFAILED\t1\n"+
+		"aa/03\tP:N0_A (1)\tCOMPLETED\t0\n"+
+		"aa/04\tP:N1_B_SP (1)\tCOMPLETED\t0\n"+
+		"aa/05\tP:SUB:N1_B_MN (1)\tCOMPLETED\t0\n"+
+		"aa/06\tP:SUB:N1_B_MN (2)\tCOMPLETED\t0\n"+
+		"aa/07\tP:GATHER (1)\tCOMPLETED\t0\n")
+
+	for i := range 4 {
+		writeTestFile(t, filepath.Join(ps, "P", "fork0", fmt.Sprintf("chnk%d", i), "_jobinfo"), "{}")
+	}
+
+	v, err := stageTasksVerdict("default", ps, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff([]string{"default: 4 stage tasks, mrp ran 4 jobs"}, v.notes); d != "" || len(v.findings) > 0 {
+		t.Errorf("4 tasks, 4 jobs: findings %v, notes (-want +got):\n%s", v.findings, d)
+	}
+
+	writeTestFile(t, filepath.Join(ps, "P", "fork0", "join", "_jobinfo"), "{}")
+
+	v, err = stageTasksVerdict("default", ps, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if keys := findingKeys(v.findings); keys != "tasks" {
+		t.Errorf("4 tasks, 5 jobs: findings %v, want one tasks finding", v.findings)
+	}
+}
+
 // TestGenFindingsRecordDivergences pins GEN_FINDINGS's half of the exit
 // split: a divergence leaves the test passing, and every diverging seed is
 // one whole line of the file even when many diverge at once.
@@ -737,6 +779,7 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 
 func genLegProj(work string, leg genLeg) string { return filepath.Join(work, "nf-"+leg.name) }
 
+
 // isStageDir reports whether name is a stage of the fixture at dir, rather
 // than a pipeline: mrp records its own failures resolving a pipeline's
 // forks or merging its outputs at the pipeline, and sometimes only by chance
@@ -774,8 +817,40 @@ func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOu
 		return genVerdict{}, err
 	}
 
+	tasks, err := stageTasksVerdict(leg.name, filepath.Join(work, "mrp"), proj)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	v.findings = append(v.findings, tasks.findings...)
+	v.notes = append(v.notes, tasks.notes...)
+
 	if recovered {
 		v.findings = append(v.findings, genFinding{leg: leg.name, key: "attempts", detail: runErr.Error()})
+	}
+
+	return v, nil
+}
+
+// stageTasksVerdict holds the leg's stage tasks in proj to the jobs mrp ran
+// in the pipestance ps, one task per job (the overhead rule), and notes
+// both counts.
+func stageTasksVerdict(leg, ps, proj string) (genVerdict, error) {
+	jobs, err := mrpJobCount(ps)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	tasks, err := stageTaskCount(proj)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	counts := fmt.Sprintf("%d stage tasks, mrp ran %d jobs", tasks, jobs)
+	v := genVerdict{notes: []string{leg + ": " + counts}}
+
+	if tasks != jobs {
+		v.findings = append(v.findings, genFinding{leg: leg, key: "tasks", detail: counts})
 	}
 
 	return v, nil
@@ -808,6 +883,7 @@ func outcomeLegVerdict(env genEnv, leg genLeg, fixture, proj string, mrp runOutc
 	}
 
 	v := outcomeVerdict(leg.name, mrp, nf, detail)
+	v.notes = append(v.notes, fmt.Sprintf("%s: mrp's run: %s; mro2nf's: %s", leg.name, mrp, nf))
 
 	if reports := outcomeRuleReports(env.allow, fixture, attempts); len(reports) > 0 {
 		v.findings = append(v.findings, genFinding{leg: leg.name, key: "outcome-rules", detail: strings.Join(reports, "\n")})

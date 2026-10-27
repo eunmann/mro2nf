@@ -86,7 +86,11 @@ func mrpRanUnresolved(path string) (bool, error) {
 func joinVerdicts(literal, witness genVerdict) genVerdict {
 	out := genVerdict{
 		findings: slices.Clip(literal.findings),
-		notes:    append(slices.Clip(literal.notes), witness.notes...),
+		notes:    slices.Clip(literal.notes),
+	}
+
+	for _, n := range witness.notes {
+		out.notes = append(out.notes, "witness invocation: "+n)
 	}
 
 	for _, f := range witness.findings {
