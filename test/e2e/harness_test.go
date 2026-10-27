@@ -180,20 +180,31 @@ var builtBinaries = map[string]string{
 	"mrjob":  "github.com/martian-lang/martian/cmd/mrjob",
 }
 
-// buildBinaries builds builtBinaries at the repo root exactly once per test
-// process, static and path-free like `make build`, so the suites run (and the
-// docker images bake) the binary a user builds.
+// fixtureBinaries are the stage code fixtures run that is built, not
+// committed, each at its path below the repo root, with its package.
+// split_test_go's comp stage is Martian's Go sum_squares, which Martian's
+// own test builds from the same package; both runners find it in the
+// fixture's dir on MROPATH.
+var fixtureBinaries = map[string]string{
+	filepath.Join("testdata", "split_test_go", "sum_squares"): "github.com/martian-lang/martian/martian/test/sum_squares",
+}
+
+// buildBinaries builds builtBinaries at the repo root and fixtureBinaries
+// exactly once per test process, static and path-free like `make build`, so
+// the suites run (and the docker images bake) the binary a user builds.
 func buildBinaries(t *testing.T) {
 	t.Helper()
 
 	buildOnce.Do(func() {
-		for _, bin := range slices.Sorted(maps.Keys(builtBinaries)) {
-			cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), builtBinaries[bin])
-			cmd.Dir = root
-			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		for _, bins := range []map[string]string{builtBinaries, fixtureBinaries} {
+			for _, bin := range slices.Sorted(maps.Keys(bins)) {
+				cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), bins[bin])
+				cmd.Dir = root
+				cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("build %s: %v\n%s", bin, err, out)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("build %s: %v\n%s", bin, err, out)
+				}
 			}
 		}
 	})

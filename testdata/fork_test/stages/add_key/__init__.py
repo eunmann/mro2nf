@@ -1,0 +1,40 @@
+import martian
+import json
+import os
+import random
+import time
+
+__MRO__ = """
+stage ADD_KEY(
+    in string key,
+    in string value,
+    in json start,
+    in string failfile,
+    out json result,
+    src py "stages/add_key",
+)
+"""
+
+
+def main(args, outs):
+    faildir = os.getenv("FAILFILE_DIR")
+    if faildir:
+        failfile = os.path.abspath(os.path.join(faildir, args.failfile))
+        if args.failfile and os.path.isfile(failfile):
+            s = ""
+            with open(failfile, "r") as f:
+                s = f.read()
+            os.unlink(failfile)
+            os.kill(os.getpid(), int(s))
+    if args.start:
+        with open(args.start, "r") as inpf:
+            s = json.load(inpf)
+    else:
+        s = {}
+    s[args.key] = args.value
+    with open(outs.result, "w") as outf:
+        json.dump(s, outf, indent=2)
+    if os.environ.get("MRO_SELF_PROFILE", False):
+        # To improve profile coverage, we want to have some cases where
+        # the stage doesn't immediately complete.
+        time.sleep(random.random() * 20)

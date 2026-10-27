@@ -61,7 +61,7 @@ func TestMrpCallGraph(t *testing.T) {
 	buildBinaries(t)
 
 	for _, tc := range mrpDiffCases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.label(), func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)
 

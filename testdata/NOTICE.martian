@@ -1,0 +1,41 @@
+Martian test material in testdata/
+
+The paths below are copied from Martian (https://github.com/martian-lang/martian)
+at commit 50ad6c054d307cb6cacb9082425c38c996f216e1, the commit go.mod pins.
+Martian is under the MIT license, reproduced in LICENSE.martian beside this
+file:
+
+    Copyright (c) 2014-2017 10x Genomics, Inc.
+    Copyright (c) 2014-2017 Martian Authors
+
+The test/<name>/ copies keep Martian's stage code and .mro files. They drop
+what only Martian's own harness reads: BUILD.bazel, run scripts, test specs
+(*.json), expected pipestances, .gitignore and .gitattributes; split_test/
+keeps them all. Where Martian's invocation is call.mro beside a pipeline.mro
+it includes, the copy names the invocation pipeline.mro, as every mro2nf
+fixture does, and the included file as noted.
+
+testdata/ path                            Martian path
+--------------------------------------    ---------------------------------------------
+split_test/                               test/split_test/
+files_test/                               test/files_test/; pipeline.mro is call.mro,
+                                          awesome.mro is pipeline.mro
+struct_test/                              test/struct_test/; pipeline.mro is call.mro,
+                                          outer.mro is pipeline.mro
+retain_test/                              test/retain_test/; pipeline.mro is call.mro,
+                                          awesome.mro is pipeline.mro
+fork_test/                                test/fork_test/
+disable_test/                             test/disable_test/; pipeline.mro is the file
+                                          its link names,
+                                          martian/syntax/testdata/disable_pipeline.mro
+exit_test/                                test/exit_test/
+monitor_test/                             test/monitor_test/
+split_test_go/                            test/split_test_go/; its sum_squares is not
+                                          copied but built by the e2e harness from
+                                          martian/test/sum_squares in the pinned module
+corpus/disable_bindings.mro               martian/syntax/testdata/disable_bindings.mro
+corpus/map_call_test.mro                  martian/syntax/testdata/map_call_test.mro
+corpus/resolve_test.mro                   martian/syntax/testdata/resolve_test.mro
+corpus/structs.mro                        martian/syntax/testdata/structs.mro
+corpus/map_call_edge_cases.mro            martian/syntax/testdata/map_call_edge_cases.mro,
+                                          without some of its stages, calls and outputs
