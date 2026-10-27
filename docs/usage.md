@@ -384,6 +384,10 @@ twice (`mrp`'s `default_retries`), at the same cpus and memory:
 | 104, 130–145 | the executor killed the task or stopped it at a time limit (137: out of memory) | yes |
 | 1 | a stage exception, or a failed `mre` step | no |
 
+A retry of a stage that deleted its file input may fail before the stage
+runs, where `mrp` runs it (divergence `stage-deletes-input`): Martian
+requires stages not to alter their inputs.
+
 `process.maxRetries = N` in a `-c` config is `mrp --autoretry=N`. mro2nf has
 no `--auto-adjust-memory`; this config raises memory on each retry instead:
 

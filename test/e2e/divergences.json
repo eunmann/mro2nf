@@ -109,6 +109,15 @@
       "outcome": {"failed": true}
     },
     {
+      "id": "stage-deletes-input",
+      "kind": "outcome",
+      "feature": "a retried stage that deleted its file input",
+      "summary": "Martian's retry tests have a stage delete its file input, then fail transiently. mrp's retry (`--autoretry`) passes the stage the deleted file's path again, and the stage, finding nothing to delete, succeeds. Under mro2nf (`process.maxRetries`) the input may link to the file in its producer's task dir, which the deletion then removes, so the retry fails loudly before the stage runs, naming the missing staged leaf.",
+      "justification": "Martian's docs say stages should never alter their inputs and must behave correctly if re-run (martian-docs `content/writing-stages/index.md`), and the tests' stage code says it breaks that rule. Giving each retry fresh copies of what it stages would copy every staged input on every retry.",
+      "evidence": ["TestMrpDiffFailureParity/retry_test", "TestMrpDiffFailureParity/retry_map_call_map_test", "TestNextflowOutcomeCountsLastAttempts", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
+    },
+    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",

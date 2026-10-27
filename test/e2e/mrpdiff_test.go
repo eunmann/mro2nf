@@ -812,6 +812,12 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// Martian's monitor_test: under --monitor, mrjob kills EXCEED_RESERVATION
 	// over its 0.01 GB request.
 	{name: "monitor_test", mrp: failedIn(failError, "EXCEED_RESERVATION"), monitor: true},
+	// Martian's retry_test and retry_map_call_map_test: a stage deletes its
+	// input file, then fails transiently. mrp's retry succeeds; mro2nf's
+	// fails staging the deleted file. Their scripts' --vdrmode=strict is
+	// left out: mrp succeeds under every mode.
+	{name: "retry_test", mrp: runOutcome{}, divergence: "stage-deletes-input", autoretry: 3, retries: 1},
+	{name: "retry_map_call_map_test", mrp: runOutcome{}, divergence: "stage-deletes-input", autoretry: 3, retries: 1},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -1052,11 +1058,11 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			}
 
 			tmp := t.TempDir()
-			mrpFlags, nfFlags := tc.flags(filepath.Join(root, "testdata", tc.name))
+			mrpFlags, nfFlags := tc.flags(t, filepath.Join(root, "testdata", tc.name))
 			mrp := mrpRunOutcome(t, bin, tc.name, tc.invocation(), tmp, mrpFlags...)
 			nf, attempts, nfLog := nfRunOutcome(t, tc.name, nfFlags...)
 
-			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
+			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts, tc.retries)...)
 			for _, r := range reports {
 				t.Error(r)
 			}
@@ -1079,7 +1085,9 @@ func (c mrpOutcomeCase) invocation() string {
 
 // flags are the launch flags of mrp's and the Nextflow run of the case's
 // fixture in dir.
-func (c mrpOutcomeCase) flags(dir string) ([]string, []string) {
+func (c mrpOutcomeCase) flags(t *testing.T, dir string) ([]string, []string) {
+	t.Helper()
+
 	mrpFlags, nfFlags := overridesFlags(dir, c.overrides)
 	if c.params != "" {
 		nfFlags = append(nfFlags, "-params-file", filepath.Join(dir, c.params))
@@ -1088,6 +1096,12 @@ func (c mrpOutcomeCase) flags(dir string) ([]string, []string) {
 	if c.monitor {
 		mrpFlags = append(mrpFlags, "--monitor")
 		nfFlags = append(nfFlags, "--mro2nf_monitor", "true")
+	}
+
+	if c.autoretry > 0 {
+		config := writeTestFile(t, filepath.Join(t.TempDir(), "autoretry.config"), fmt.Sprintf("process.maxRetries = %d\n", c.autoretry))
+		mrpFlags = append(mrpFlags, fmt.Sprintf("--autoretry=%d", c.autoretry))
+		nfFlags = append(nfFlags, "-c", config)
 	}
 
 	return mrpFlags, nfFlags
@@ -1192,13 +1206,20 @@ func nextflowOutcome(proj string, runErr error) (runOutcome, []string, error) {
 		return runOutcome{}, attempts, nil
 	}
 
+	// mrp's retry of a failed job removes its failure files
+	// (Metadata.checkedReset), so only a task's last attempt counts.
+	last := map[string]int{}
+	for i, r := range rows {
+		last[r.Name] = i
+	}
+
 	var failed []failedAttempt
 
-	for _, r := range rows {
+	for i, r := range rows {
 		// PLAN starts the run as mrp starts one, compiling the invocation and
 		// reading the overrides file, so its failure is mrp's refusal to make
 		// a pipestance, which blames no stage (mrpFailedOutcome).
-		if r.Status == "FAILED" && r.Name != "PLAN" {
+		if r.Status == "FAILED" && r.Name != "PLAN" && last[r.Name] == i {
 			failed = append(failed, failedAttempt{Hash: r.Hash, Exit: r.Exit})
 		}
 	}

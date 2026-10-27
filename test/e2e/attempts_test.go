@@ -113,3 +113,33 @@ func TestNextflowOutcomeOfAFailedPlan(t *testing.T) {
 		t.Errorf("outcome (-want +got):\n%s\nattempts %v, want PLAN's", diff, attempts)
 	}
 }
+
+// TestNextflowOutcomeCountsLastAttempts checks a failed attempt a retry of
+// its task follows blames nothing, as mrp's retry removes the failed job's
+// failure files: A's retry succeeds, and only B's retry, which failed
+// before it ran the stage, blames anything.
+func TestNextflowOutcomeCountsLastAttempts(t *testing.T) {
+	proj := t.TempDir()
+	trace := "task_id\thash\tname\tstatus\texit\n" +
+		"1\taa/000001\tA\tFAILED\t75\n2\tbb/000002\tB\tFAILED\t75\n" +
+		"3\taa/000003\tA\tCOMPLETED\t0\n4\tbb/000004\tB\tFAILED\t1\n"
+
+	writeTestFile(t, filepath.Join(proj, "trace.txt"), trace)
+
+	for hash, stage := range map[string]string{"aa/000001": "A", "bb/000002": "B"} {
+		writeTestFile(t, filepath.Join(proj, "work", hash+"0000", "main", mreStageFile), stage)
+	}
+
+	if err := os.MkdirAll(filepath.Join(proj, "work", "bb", "0000040000"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := nextflowOutcome(proj, errTestRunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(failedIn(failError, ""), got); diff != "" {
+		t.Errorf("outcome (-want +got):\n%s", diff)
+	}
+}
