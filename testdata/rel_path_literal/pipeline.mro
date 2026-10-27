@@ -1,0 +1,63 @@
+# #665: a relative path, file or filetype value reaches the stage as written,
+# as mrp passes it: mrp resolves, checks and stages none, so the stage reads
+# it against its own job dir. LIT binds relative literals at the call site,
+# ENT forwards the invocation's; "." names a dir that exists there, the rest
+# name nothing. ECHO reports the values it receives.
+filetype txt;
+
+stage ECHO(
+    in  path      dot,
+    in  path      sub,
+    in  path      up,
+    in  file      f,
+    in  txt       t,
+    in  path[]    arr,
+    in  map<path> m,
+    out string    seen,
+    src py        "stages/echo",
+)
+
+pipeline REL_PATH_LITERAL(
+    in  path   entry_dot,
+    in  txt    entry_t,
+    out string seen_lit,
+    out string seen_entry,
+)
+{
+    call ECHO as LIT(
+        dot = ".",
+        sub = "foo/bar",
+        up  = "../x",
+        f   = "a.txt",
+        t   = "./b.txt",
+        arr = [
+            ".",
+            "c/d",
+        ],
+        m   = {
+            "k": "..",
+        },
+    )
+
+    call ECHO as ENT(
+        dot = self.entry_dot,
+        sub = "foo/bar",
+        up  = "../x",
+        f   = "a.txt",
+        t   = self.entry_t,
+        arr = [self.entry_dot],
+        m   = {
+            "k": self.entry_dot,
+        },
+    )
+
+    return (
+        seen_lit   = LIT.seen,
+        seen_entry = ENT.seen,
+    )
+}
+
+call REL_PATH_LITERAL(
+    entry_dot = ".",
+    entry_t   = "rel/e.txt",
+)

@@ -4,12 +4,7 @@ package e2e
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -198,47 +193,12 @@ func normLeaf(t *testing.T, s string, mode leafMode) string {
 		return s
 	}
 
-	// mrp leaves a symlink in the job's files dir to each output it moved
-	// into outs/, and WalkDir does not follow a root that is one.
-	walkRoot, err := filepath.EvalSymlinks(s)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", s, err)
-	}
-
-	h := sha256.New()
-
-	err = filepath.WalkDir(walkRoot, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-
-		rel, _ := filepath.Rel(walkRoot, p)
-
-		if _, err := os.Stat(p); d.Type()&fs.ModeSymlink != 0 && errors.Is(err, fs.ErrNotExist) {
-			target, err := os.Readlink(p)
-			_, _ = fmt.Fprintf(h, "%s\x00l\x00%s\x00", rel, target)
-
-			return err
-		}
-
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-
-		if _, err := fmt.Fprintf(h, "%s\x00%d\x00", rel, len(b)); err != nil {
-			return err
-		}
-
-		_, err = h.Write(b)
-
-		return err
-	})
+	sum, err := hashDirTree(s)
 	if err != nil {
 		t.Fatalf("digest %s: %v", s, err)
 	}
 
-	tag := "<file sha256:" + hex.EncodeToString(h.Sum(nil))[:16]
+	tag := "<file sha256:" + sum[:16]
 	if mode == leafNamed {
 		tag += " " + filepath.Base(s)
 	}

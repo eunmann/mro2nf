@@ -918,6 +918,36 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 	}
 }
 
+// TestRelativeLeavesPassVerbatim guards #665: mrp passes a relative path
+// as written, and a job resolves it against its own dir, so neither a task's
+// args nor a bundle stages one, even where it names a file from the writer's
+// working dir.
+func TestRelativeLeavesPassVerbatim(t *testing.T) {
+	dir := t.TempDir()
+	writeSelfNamed(t, filepath.Join(dir, "sub", "x.txt"))
+	t.Chdir(dir)
+
+	params := typestest.Fields(t, "dot path", "up path", "sub path", "x file", "gone path", "arr path[]")
+	payload := map[string]any{
+		"dot": ".", "up": "..", "sub": "sub", "x": "./sub/x.txt", "gone": "foo/bar",
+		"arr": []any{".", "sub/x.txt"},
+	}
+
+	if d := cmp.Diff(payload, linkLeaves(t, filepath.Join(dir, "args"), payload, params, shim.Roots{})); d != "" {
+		t.Errorf("LinkLeaves (-want +got):\n%s", d)
+	}
+
+	if d := cmp.Diff(payload, writeMarked(t, filepath.Join(dir, "bundle"), payload, params)); d != "" {
+		t.Errorf("WriteItem (-want +got):\n%s", d)
+	}
+
+	for _, files := range []string{filepath.Join(dir, "args", "f"), filepath.Join(dir, "bundle", "f")} {
+		if _, err := os.Lstat(files); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s exists (%v), want no staged leaf", files, err)
+		}
+	}
+}
+
 // TestReadBundleEmpty returns nil for an absent optional input.
 func TestReadBundleEmpty(t *testing.T) {
 	got, err := shim.Refs{}.ReadBundle("")

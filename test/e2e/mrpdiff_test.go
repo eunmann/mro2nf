@@ -373,11 +373,16 @@ var mrpDiffCases = []mrpDiffCase{
 	// #624: a link that reaches nothing inside a directory output reaches its
 	// reader, from the producer's bundle and from a copy of it.
 	{name: "dir_dangling_link", cloud: true},
+	// #665: a link to a subdirectory inside a directory output reaches its
+	// reader, from the producer's bundle and from a copy of it.
+	{name: "dir_link_dir", cloud: true},
 	// #328: string values shaped like @mre: markers reach the stage and the
 	// published outs exactly as mrp gives them.
 	{name: "marker_strings"},
 	// #284: every file a stage receives keeps the basename mrp passes it.
 	{name: "basename_echo"},
+	// #665: relative path literals reach the stage as written, unstaged.
+	{name: "rel_path_literal"},
 	// #543: a stage opening a companion file beside its entry file input
 	// finds it, as under mrp: every task reads a head-node path in place.
 	{name: "entry_file_sibling"},

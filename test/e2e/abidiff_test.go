@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"maps"
 	"math"
@@ -281,42 +282,42 @@ func hashFileContent(path string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// hashDirTree hashes a directory's relative entry names (empty subdirs
-// included) and file contents in lexical walk order, through a symlinked root.
-// A link inside that reaches nothing hashes as its target text, which a
-// reader under either runtime reads (#624).
-func hashDirTree(dir string) (string, error) {
-	root, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", dir, err)
-	}
+// errTreeCycle reports a directory tree a link inside makes infinite.
+var errTreeCycle = errors.New("a link inside the tree reaches its own ancestor")
 
+// hashDirTree hashes a directory's relative entry names (empty subdirs
+// included) and file contents in lexical walk order, as a reader sees the
+// tree through its links: through a symlinked root, and a link inside to a
+// directory as that directory, which mrp passes as its producer wrote it and
+// mro2nf as a copy (#665). A link inside that reaches nothing hashes as its
+// target text, which a reader under either runtime reads (#624).
+func hashDirTree(dir string) (string, error) {
 	h := sha256.New()
 
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	if err := hashTreeEntry(h, dir, ".", map[string]bool{}); err != nil {
+		return "", fmt.Errorf("hash tree %s: %w", dir, err)
+	}
 
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
 
-		// hash.Hash.Write never returns an error.
-		if d.IsDir() {
-			_, _ = fmt.Fprintf(h, "d %s\n", rel)
+// hashTreeEntry writes to h the entry at p, named rel in its tree, and every
+// entry below it. open holds the real paths of the directories p lies in.
+// hash.Hash.Write never returns an error.
+func hashTreeEntry(h hash.Hash, p, rel string, open map[string]bool) error {
+	info, err := os.Stat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		target, err := os.Readlink(p)
+		_, _ = fmt.Fprintf(h, "l %s %s\n", rel, target)
 
-			return nil
-		}
+		return err
+	}
 
-		if _, err := os.Stat(p); d.Type()&fs.ModeSymlink != 0 && errors.Is(err, fs.ErrNotExist) {
-			target, err := os.Readlink(p)
-			_, _ = fmt.Fprintf(h, "l %s %s\n", rel, target)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", p, err)
+	}
 
-			return err
-		}
-
+	if !info.IsDir() {
 		sum, err := hashFileContent(p)
 		if err != nil {
 			return err
@@ -325,12 +326,34 @@ func hashDirTree(dir string) (string, error) {
 		_, _ = fmt.Fprintf(h, "f %s %s\n", rel, sum)
 
 		return nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("hash tree %s: %w", dir, err)
 	}
 
-	return hex.EncodeToString(h.Sum(nil)), nil
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", p, err)
+	}
+
+	if open[resolved] {
+		return fmt.Errorf("%s: %w", p, errTreeCycle)
+	}
+
+	open[resolved] = true
+	defer delete(open, resolved)
+
+	_, _ = fmt.Fprintf(h, "d %s\n", rel)
+
+	entries, err := os.ReadDir(p)
+	if err != nil {
+		return fmt.Errorf("read dir %s: %w", p, err)
+	}
+
+	for _, e := range entries {
+		if err := hashTreeEntry(h, filepath.Join(p, e.Name()), filepath.Join(rel, e.Name()), open); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // readABIInvocation reads and normalizes one phase metadata dir. _args and
