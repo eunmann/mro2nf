@@ -34,9 +34,5 @@ map_test/                                 test/map_test/
 split_test_go/                            test/split_test_go/; its sum_squares is not
                                           copied but built by the e2e harness from
                                           martian/test/sum_squares in the pinned module
-corpus/disable_bindings.mro               martian/syntax/testdata/disable_bindings.mro
-corpus/map_call_test.mro                  martian/syntax/testdata/map_call_test.mro
-corpus/resolve_test.mro                   martian/syntax/testdata/resolve_test.mro
-corpus/structs.mro                        martian/syntax/testdata/structs.mro
-corpus/map_call_edge_cases.mro            martian/syntax/testdata/map_call_edge_cases.mro,
-                                          without some of its stages, calls and outputs
+corpus/martian/                           its own SOURCE and LICENSE: each file keeps
+                                          its repository path below it

@@ -32,18 +32,6 @@ func standInSkipped() map[string]string {
 	return skipped
 }
 
-// stagingSkipped are the corpus entries TestStandInStagesOnlyWhatItReads
-// does not hold to mrp's data movement, by why.
-func stagingSkipped() map[string]string {
-	const countRead = "mro2nf defect: MAPPED_CONST_SUM, unforked, reads only the fork count of the map call " +
-		"over GENERATE_DISTRIBUTION.values, but is given every instance of GENERATE_DISTRIBUTION.POW"
-
-	return map[string]string{
-		"corpus/martian/martian/syntax/testdata/map_call_test.mro": countRead,
-		"corpus/martian/test/map_test/pipeline.mro":                countRead,
-	}
-}
-
 // TestStandInStagesOnlyWhatItReads holds every instance of every fixture to
 // mrp's data movement: an mrp job reads, of each node its bindings read,
 // the outs of the forks its resolution reads, so an instance may be given
@@ -56,10 +44,6 @@ func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 
 	for _, e := range sweepEntries(t) {
 		if _, skip := standInSkipped()[e.name]; skip {
-			continue
-		}
-
-		if _, skip := stagingSkipped()[e.name]; skip {
 			continue
 		}
 

@@ -90,6 +90,11 @@ func TestNextflowLint(t *testing.T) {
 				return
 			}
 
+			if e.transpileErr != nil && strings.HasPrefix(e.project, lintCorpusPrefix) &&
+				strings.Contains(e.transpileErr.Error(), keywordInputRefusal) {
+				t.Skipf("refused as docs/feature-coverage.md documents (keyword-input): %v", e.transpileErr)
+			}
+
 			if e.transpileErr != nil {
 				t.Fatalf("transpile %s: %v", e.project, e.transpileErr)
 			}
@@ -181,6 +186,12 @@ type lintEmission struct {
 // lintCorpusPrefix starts every corpus emission's project name, which no
 // fixture's name does.
 const lintCorpusPrefix = "corpus_"
+
+// keywordInputRefusal is mro2nf's documented refusal of an entry input named
+// with a Groovy or Nextflow keyword (#585). A corpus stage entry's input may
+// be so named (Cell Ranger's LOGIC_NOT has `boolean`), though no pipeline
+// that calls the stage is refused.
+const keywordInputRefusal = "which Nextflow's params block refuses as a param name"
 
 // lintEmissions are every fixture's invocation and every corpus
 // invocation Martian accepts, each named by its project.
