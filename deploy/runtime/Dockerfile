@@ -29,7 +29,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -o /out/mrjob github.com/martian-lang/martian/cmd/mrjob
 
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 # bash launcher + ps (Nextflow task metrics) + coreutils + aws CLI (S3 staging on
 # AWS Batch). No ENTRYPOINT: the backend invokes the generated command directly.
 # Versions are not pinned: Debian drops a superseded version from its mirrors
