@@ -93,7 +93,7 @@ var scaleShapes = map[string]scaleShape{
 		name: "zip", probe: "MRE_BENCH_ZIP_PROBE", narrow: 4, wide: 10000,
 		call:  func(w int) string { return fmt.Sprintf("ZIPFAN(\n    n  = %d,\n    kb = 4,\n)", w) },
 		jobs:  func(w int) int { return 2 + w },
-		prods: func(int) int { return 1 },
+		prods: func(w int) int { return w },
 		check: checkOutsLen("ws", 1),
 	},
 	"zipgated": {
@@ -102,7 +102,7 @@ var scaleShapes = map[string]scaleShape{
 			return fmt.Sprintf("ZIPGATED(\n    n    = %d,\n    kb   = 4,\n    skip = false,\n)", w)
 		},
 		jobs:  func(w int) int { return 3 + w },
-		prods: func(int) int { return 1 },
+		prods: func(w int) int { return w },
 		check: checkOutsLen("ws", 1),
 	},
 	// Every other fork's USE is disabled, in each of STATIC and GATED.

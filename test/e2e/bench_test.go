@@ -27,7 +27,7 @@ type benchLane struct {
 	dir       string // fixture dir under bench/
 	mro       string // entry invocation .mro within dir
 	probe     string // marker string the fixture's probe file carries
-	producers int    // how many tasks legitimately write the probe file
+	producers int    // how many probe files the stages legitimately write
 	// mrpJobs is the number of jobs real mrp runs for this invocation, which
 	// the lane's stage tasks must equal (TestMrpDiffBenchJobs checks the
 	// number against mrp itself).
@@ -70,12 +70,12 @@ func benchLanes() []benchLane {
 		{key: "mapnested_w2", dir: "mapnested", mro: "pipeline_w2.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 2 * 2, mrpJobs: 2 * 2},
 		{key: "mapnested_w4", dir: "mapnested", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 4 * 4, mrpJobs: 4 * 4},
 		// MKVALS and MKFILES, then one USE per fork zipping their outputs.
-		{key: "zip_w4", dir: "zip", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 1, mrpJobs: 2 + 4, flatStaging: true},
-		{key: "zip_w16", dir: "zip", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 1, mrpJobs: 2 + 16, flatStaging: true},
+		{key: "zip_w4", dir: "zip", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 4, mrpJobs: 2 + 4, flatStaging: true},
+		{key: "zip_w16", dir: "zip", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 16, mrpJobs: 2 + 16, flatStaging: true},
 		// MKVALS, GATE and the MKFILES it gates, then one USE per fork zipping
 		// MKVALS's values with MKFILES's files through the gate (#494).
-		{key: "zipgated_w4", dir: "zipgated", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 4, flatStaging: true},
-		{key: "zipgated_w16", dir: "zipgated", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 16, flatStaging: true},
+		{key: "zipgated_w4", dir: "zipgated", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 4, mrpJobs: 3 + 4, flatStaging: true},
+		{key: "zipgated_w16", dir: "zipgated", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 16, mrpJobs: 3 + 16, flatStaging: true},
 		// MKXS and GATE, then in each of 4 lanes an A per fork writing one
 		// file and a B per fork reading the A file at its own index (#601):
 		// each B task stages that one file.
