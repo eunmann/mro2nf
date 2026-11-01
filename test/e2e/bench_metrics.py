@@ -516,7 +516,7 @@ def parse_args():
     p.add_argument("--trace", required=True, help="-with-trace TSV")
     p.add_argument("--workdir", required=True, help="dir holding the run's work/")
     p.add_argument("--probe", required=True, help="probe file marker string")
-    p.add_argument("--producers", required=True, type=int, help="tasks that write the probe file")
+    p.add_argument("--producers", required=True, type=int, help="probe files the stages write")
     p.add_argument("--stages", required=True, help="JSON array of stage-phase process names")
     p.add_argument("--dag", default="", help="-with-dag mermaid file")
     p.add_argument("--mrp-jobs", required=True, type=int, help="jobs mrp runs for this invocation")
