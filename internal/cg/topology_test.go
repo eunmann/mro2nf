@@ -326,3 +326,22 @@ func TestTopologyPreflights(t *testing.T) {
 		}
 	}
 }
+
+// TestOutsReadAnUnrootedPipelineGate (#676, gen-diff seed
+// 135169235121245): mrp restores the forks of SUB, a mapped sub-pipeline no
+// stage is rooted on, when it reattaches to post-process, evaluating the
+// GATE.off its source holds; the pipeline outs read that field alone,
+// though nothing they publish reads it.
+func TestOutsReadAnUnrootedPipelineGate(t *testing.T) {
+	topo, err := loadFixture(t, "gated_unforked_pipeline").g.Topology()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Read{{Node: "TOP.GATE", Fields: []string{"off"}}}
+	got := slices.DeleteFunc(slices.Clone(topo.Outs), func(r Read) bool { return r.Node != "TOP.GATE" })
+
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("pipeline outs' reads of TOP.GATE (-want +got):\n%s", d)
+	}
+}

@@ -1,0 +1,90 @@
+# #676 (gen-diff seed 135169235121245): SUB maps over LEFT's map of ECHO's
+# forks, which GATE's off gates, so its source's length is unknown at
+# compile time; but
+# only SUB's outs read its input, not SHOW, so Martian roots no stage on
+# SUB, and TOP's outs read neither SUB nor ECHO. mrp still
+# expands SUB's forks when post-processing reattaches the pipestance
+# (core/pipestance.go RestoreForks expands every node's), evaluating
+# GATE.off, and panics unless GATE's outs are there: the pipeline outs
+# wait for GATE though nothing they publish reads it.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage ECHO(
+    in  int x,
+    out int y,
+    src py  "stages/echo",
+)
+
+stage SHOW(
+    in  string s,
+    out string t,
+    src py     "stages/show",
+)
+
+pipeline LEFT(
+    in  bool      off,
+    out map<ECHO> es,
+)
+{
+    map call ECHO(
+        x = split {
+            "a": 1,
+        },
+    ) using (
+        disabled = self.off,
+    )
+
+    return (
+        es = ECHO,
+    )
+}
+
+pipeline SUB(
+    in  ECHO   e,
+    out int    y,
+    out string t,
+)
+{
+    call SHOW(
+        s = "sub",
+    )
+
+    return (
+        y = self.e.y,
+        t = SHOW.t,
+    )
+}
+
+pipeline TOP(
+    in  bool   v,
+    out string t,
+)
+{
+    call GATE(
+        v = self.v,
+    )
+
+    call LEFT(
+        off = GATE.off,
+    )
+
+    map call SUB(
+        e = split LEFT.es,
+    )
+
+    call SHOW as LAST(
+        s = "top",
+    )
+
+    return (
+        t = LAST.t,
+    )
+}
+
+call TOP(
+    v = false,
+)
