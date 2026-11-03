@@ -714,6 +714,11 @@ var mrpDiffCases = []mrpDiffCase{
 	// with no root on the merged call gathers that stage's one root's
 	// forks, which the pipeline outs wait for.
 	{name: "merge_sub_root"},
+	// #676 (gen-diff seed 135169235121245): a mapped sub-pipeline no stage
+	// is rooted on, over a source a stage's out gates, whose forks mrp
+	// restores reattaching to post-process: the pipeline outs wait for the
+	// gate.
+	{name: "gated_unforked_pipeline"},
 	// #565: a top-level map call's outs are its pipeline's per fork, each
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.

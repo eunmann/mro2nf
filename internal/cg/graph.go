@@ -43,8 +43,12 @@ type Graph struct {
 	// splitRoots are the fork roots by their own split, which two
 	// instances of one sub-pipeline, sharing their calls, do not share.
 	splitRoots map[*syntax.SplitExp]*syntax.CallGraphStage
-	counts     map[*syntax.SplitExp]rootCount
-	partnered  map[string]nodePartners
+	// restored are the splits of unknown length of every node, stage or
+	// sub-pipeline, by fqid: mrp restores each one's forks when it
+	// reattaches a pipestance, whether or not a stage is rooted on it.
+	restored  []*syntax.SplitExp
+	counts    map[*syntax.SplitExp]rootCount
+	partnered map[string]nodePartners
 }
 
 // Load compiles the entry .mro at entry as mrp compiles the invocation it
@@ -123,6 +127,10 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 	closure := root.NodeClosure()
 
 	for _, fqid := range slices.Sorted(maps.Keys(closure)) {
+		if sp := closure[fqid].Split(); sp != nil && !sp.Source.KnownLength() {
+			g.restored = append(g.restored, sp)
+		}
+
 		st, ok := closure[fqid].(*syntax.CallGraphStage)
 		if !ok {
 			continue
@@ -137,10 +145,8 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 		}
 	}
 
-	for sp := range g.splitRoots {
-		if sp != nil && !sp.Source.KnownLength() {
-			g.counts[sp] = g.countSplit(sp)
-		}
+	for _, sp := range g.restored {
+		g.counts[sp] = g.countSplit(sp)
 	}
 
 	g.partnered = g.indexPartners()
@@ -260,10 +266,9 @@ type rootCount struct {
 	reads  []*syntax.RefExp
 }
 
-// rootCount is root's, none for a source of known length. Every stage's
-// fork roots are counted once, when the graph is built; the call of a merge
-// no stage is forked on, such as a mapped sub-pipeline's in the pipeline
-// outs, is counted where it is asked for.
+// rootCount is root's, none for a source of known length. Every node's
+// split of unknown length is counted once, when the graph is built
+// (Graph.restored); any other is counted where it is asked for.
 func (g *Graph) rootCount(root *syntax.CallGraphStage) rootCount {
 	sp := root.Split()
 	if sp == nil || sp.Source.KnownLength() {
@@ -421,14 +426,15 @@ func (g *Graph) allGatedBy(fqids []string, gate syntax.Exp) bool {
 }
 
 // sourceGates are the disable gates mrp evaluates expanding the forks of
-// every root whose forks it expands at run time (countWalk), which it
+// every node whose forks it expands at run time (countWalk), which it
 // requires ready to restore those forks when it reattaches a pipestance
-// (core/pipestance.go RestoreForks, core/fork.go getDisabledSource).
+// (core/pipestance.go RestoreForks, core/fork.go getDisabledSource): a
+// mapped sub-pipeline no stage is rooted on included (#676).
 func (g *Graph) sourceGates() []syntax.Exp {
-	out := make([]syntax.Exp, 0, len(g.roots))
+	var out []syntax.Exp
 
-	for _, root := range g.sortedRoots() {
-		out = append(out, g.rootCount(root).gates...)
+	for _, sp := range g.restored {
+		out = append(out, g.counts[sp].gates...)
 	}
 
 	return out
