@@ -203,12 +203,12 @@ jobs:
           go-version-file: go.mod
           cache: true
       - uses: ./.github/actions/setup-martian
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       # Installs and caches the Nextflow binary.
-      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - uses: nf-core/setup-nextflow@c66f1bfa2dc817ae23f4b34eaa26fa5f1453ca71 # v3.1.0
       - name: Resolve Nextflow version
         id: nxf
         # setup-nextflow exposes no version output, so read it back; keying the
@@ -268,11 +268,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - uses: nf-core/setup-nextflow@c66f1bfa2dc817ae23f4b34eaa26fa5f1453ca71 # v3.1.0
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
@@ -299,11 +299,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - uses: nf-core/setup-nextflow@c66f1bfa2dc817ae23f4b34eaa26fa5f1453ca71 # v3.1.0
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
@@ -335,11 +335,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - uses: nf-core/setup-nextflow@c66f1bfa2dc817ae23f4b34eaa26fa5f1453ca71 # v3.1.0
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
